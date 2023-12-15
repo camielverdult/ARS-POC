@@ -5,6 +5,7 @@ import pathlib
 import time
 
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 # from train import INPUT_SIZE
@@ -55,8 +56,6 @@ def take_screenshots(domain_ids: list):
     # Map domain_id to domain
     domain_mapping = {row[0]: row[1] for row in cur.fetchall()}
 
-    # TODO: Unexpected error when taking screenshot for a-msedge.net: Message: Tried to run command without establishing a connection
-
     try:
         for domain_id, domain_url in domain_mapping.items():
             filename = get_screenshot_path_for_domain(domain_url)
@@ -84,6 +83,13 @@ def take_screenshots(domain_ids: list):
                     ignored = True
                     exception_type = "ublock"
                 else:
+                    try:
+                        # Destroy abnoxious popups
+                        driver.find_element(By.ID, "dialog-close").click()
+                        time.sleep(1)
+                    except:
+                        pass
+
                     # Scroll to the top of the page
                     driver.execute_script("window.scrollTo(0, 0);")
                     time.sleep(1)
@@ -125,6 +131,9 @@ def take_screenshots(domain_ids: list):
                     exception_type = "unknown"
                     print(f"Unexpected error when taking screenshot for {domain_url}: {e}")
 
+            if ignored:
+                filename = None
+
             cur.execute(
                 "UPDATE domains SET screenshot = ?, ignored = ? WHERE domain_id = ?",
                 (filename, ignored, domain_id)
@@ -134,8 +143,8 @@ def take_screenshots(domain_ids: list):
 
             # Insert screenshot process metrics
             cur.execute(
-                "INSERT INTO metrics (domain_id, start_time, end_time, duration, exception) VALUES (?, ?, ?, ?, ?)",
-                (domain_id, start_time, end_time, end_time - start_time, exception_type)
+                "INSERT INTO metrics (domain_id, start_time, end_time, exception) VALUES (?, ?, ?, ?)",
+                (domain_id, start_time, end_time, exception_type)
             )
 
             conn.commit()
@@ -155,7 +164,7 @@ def screenshot_domains():
     start_time = time.time()
 
     # Fetch domain IDs that are not ignored
-    domain_ids = db.get_unprocssed_domains()
+    domain_ids, description = db.get_unprocssed_domains()
 
     if not domain_ids: # <=> len(domain_ids) == 0
         print("🎉 All domains have already been processed!")
@@ -166,12 +175,11 @@ def screenshot_domains():
         os.makedirs('screenshots')
 
     # Define the number of processes and chunk size for multiprocessing
-    num_processes = int(multiprocessing.cpu_count() * BROWSERS_PER_CORE) # TODO: find upper limit and optimise BROWSERS_PER_CORE
+    num_processes = int(multiprocessing.cpu_count() * BROWSERS_PER_CORE) # TODO: find upper limit of num_processes
     chunk_size = len(domain_ids) // num_processes + (len(domain_ids) % num_processes > 0)
 
     # Use multiprocessing to take screenshots
-    # TODO: use a multiprocessing queue to distribute work to processes instead of chunking, this will allow processes that finish quicker because of network or DNS issues to take more screenshots and reduce the overall time it takes to take screenshots
-    print(f"🚀 Visiting {len(domain_ids)} domains with {num_processes} processes...")
+    print(f"🚀 Visiting {description} domains ({len(domain_ids)}) with {num_processes} processes...")
     with multiprocessing.Pool(processes=num_processes) as pool:
         for _ in pool.imap_unordered(take_screenshots, chunker(domain_ids, chunk_size)):
             pass
@@ -192,7 +200,7 @@ def screenshot_domains():
         num_pictures = 0
 
     # Query for how long it took to take screenshots virtually
-    cur.execute("SELECT SUM(duration) FROM metrics WHERE exception IS NULL")
+    cur.execute("SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NULL")
     virtual_time = cur.fetchone()[0]
 
     if virtual_time is None:
@@ -206,14 +214,14 @@ def screenshot_domains():
         skipped_domains = 0
 
     # Find the average virtual time it took to take a succesful screenshot
-    cur.execute("SELECT AVG(duration) FROM metrics WHERE exception IS NULL")
+    cur.execute("SELECT AVG(end_time - start_time) FROM metrics WHERE exception IS NULL")
     avg_duration = cur.fetchone()[0]
 
     if avg_duration is None:
         avg_duration = 0
 
     # Find the lost time due to errors
-    cur.execute("SELECT SUM(duration) FROM metrics WHERE exception IS NOT NULL")
+    cur.execute("SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NOT NULL")
     time_lost = cur.fetchone()[0]
 
     if time_lost is None:

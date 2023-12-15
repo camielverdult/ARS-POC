@@ -3,6 +3,7 @@ import shutil
 import sqlite3
 import sys
 import time
+import yaml
 
 import pandas as pd
 
@@ -11,7 +12,7 @@ DOMAIN_AMOUNT = 200
 
 # These domains triggered MalwareBytes and contain Riskware, Trojans, Malvertising, are compromised, etc.
 # AKA bad stuff that we don't want to visit
-BAD_DOMAINS = ["e7z9t4x6a0v5mk3zo1a0xj2z7c6g8sa6js5z7s2c3h9x0s5fh3a6sjwb8q7m.xyz", "onlyindianx.cc", "tokyomotion.net", "heylink.me", "tamilyogi.plus", "zcswet.com", "bidmachine.io", "doodstream.io", "1024tera.com", "mobile-tracker-free.com", "yadongtube.net", "vlxx.moe", "ai-lawandorder.com"]
+BAD_DOMAINS = ["e7z9t4x6a0v5mk3zo1a0xj2z7c6g8sa6js5z7s2c3h9x0s5fh3a6sjwb8q7m.xyz", "onlyindianx.cc", "tokyomotion.net", "heylink.me", "tamilyogi.plus", "zcswet.com", "bidmachine.io", "doodstream.io", "1024tera.com", "mobile-tracker-free.com", "yadongtube.net", "vlxx.moe", "ai-lawandorder.com", "worldfcdn2.com", "edgesuite.net"]
 
 def get_conn(filename=None):
     if filename:
@@ -26,10 +27,10 @@ def init_db():
     # Create domains table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS domains (
-            domain_id INTEGER PRIMARY KEY, 
+            domain_id INTEGER PRIMARY KEY,
             ranking INTEGER,
             domain TEXT,
-            screenshot TEXT, 
+            screenshot TEXT,
             ignored BOOLEAN DEFAULT FALSE
         )
     ''')
@@ -72,9 +73,8 @@ def init_db():
     cur.execute('''
         CREATE TABLE IF NOT EXISTS metrics
         (domain_id INTEGER, 
-         start_time TEXT, 
-         end_time TEXT, 
-         duration REAL, 
+         start_time TEXT,
+         end_time TEXT,
          exception TEXT,
          FOREIGN KEY(domain_id) REFERENCES domains(domain_id))
     ''')
@@ -96,8 +96,6 @@ def seed_domains():
     # Read domains from CSV file
     domains_df = pd.read_csv('tranco_N7VPW.csv', header=None)
 
-    # Connect to the database
-    init_db()
     conn = get_conn()
     cur = conn.cursor()
 
@@ -126,10 +124,10 @@ def seed_domains():
     # Commit the changes to the database
     conn.commit()
 
-def seed_topics():
-    # Inject YML data into the database
-    init_db()
+    cur.close()
+    conn.close()
 
+def seed_topics():
     # Connect to the database
     conn = get_conn()
     cur = conn.cursor()
@@ -154,10 +152,53 @@ def seed_topics():
     # Commit the changes to the database
     conn.commit()
 
+    cur.close()
+    conn.close()
+
+def seed_labels():
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Check if topics and domains tables are empty
+    cur.execute("SELECT COUNT(*) FROM topics")
+    topics_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM domains")
+    domains_count = cur.fetchone()[0]
+
+    if topics_count == 0 or domains_count == 0:
+        print("🚨 Missing topics or domains in the database!")
+        exit(1)
+
+    # Build SQL statement to bulk-insert labels into the database
+    print("📝 Inserting labels into the database...")
+
+    # Read the labels from the labels.yml file and convert to SQL statement
+    # The labels.yml file entry is structured like this:
+    # mozilla.org: [2, 6]
+    yaml_file = open('labels.yml')
+    yaml_data = yaml.safe_load(yaml_file)
+    for domain, topic_ids in yaml_data.items():
+        for topic_id in topic_ids:
+            # Insert each entry in the topics list as a label for the domain
+            sql = f"INSERT INTO labels (domain_id, topic_id) VALUES ((SELECT domain_id FROM domains WHERE domain = '{domain}'), {topic_id})"
+            try:
+                cur.execute(sql)
+            except sqlite3.Error as e:
+                print(f"Error inserting labels: {e}")
+                exit(1)
+
+    # Commit the changes to the database
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
 def seed():
     init_db()
     seed_domains()
     seed_topics()
+    seed_labels()
 
 def backup():
     # Define backup directory
@@ -233,7 +274,7 @@ def get_topics() -> list:
 
     return topics
 
-def get_unprocssed_domains() -> list[int]:
+def get_unprocssed_domains() -> (list[int], str):
     """Returns a list of domain IDs that have not been processed yet and are not ignored or have had an exception."""
 
     # Connect to the database
@@ -244,12 +285,20 @@ def get_unprocssed_domains() -> list[int]:
     cur.execute("SELECT COUNT(*) FROM metrics")
     metrics_count = cur.fetchone()[0]
 
+    # Check if the amount of metrics we have is less than the amount of domains we have
+    # If so, we need to process all domains
+    cur.execute(f"SELECT COUNT(*) FROM domains LIMIT {metrics_count}")
+    domains_count = cur.fetchone()[0]
+
+    description = ""
+
     # If the metrics table is empty, we need to process all domains
-    if metrics_count == 0:
+    if metrics_count == 0 or metrics_count < domains_count:
         # Get all domain IDs that are not ignored and not in the BAD_DOMAINS list
         sql_query = f"""
             SELECT domain_id FROM domains
         """
+        description = "all"
     else:
         # Get all domain IDs that have not been processed yet and are not ignored or have had a timeout exception
         sql_query = f"""
@@ -258,8 +307,9 @@ def get_unprocssed_domains() -> list[int]:
             LEFT JOIN metrics m ON d.domain_id = m.domain_id
             WHERE (m.start_time IS NULL OR m.start_time < datetime('now', '-1 day'))
             AND (d.ignored IS FALSE)
-            AND (m.exception IS NULL OR m.exception = 'timeout')
+            AND (m.exception IS NULL)
         """
+        description = "exceptionless"
 
     # Execute the query
     cur.execute(sql_query)
@@ -268,9 +318,9 @@ def get_unprocssed_domains() -> list[int]:
     cur.close()
     conn.close()
 
-    return unprocessed_domain_ids
+    return (unprocessed_domain_ids, description)
 
-def get_training_data(limit: int) -> list: # list[(int, str, list[int])]
+def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     """Returns the id, screenshot path and labels/topics for all labeled domains"""
     conn = get_conn()
     cur = conn.cursor()
@@ -296,20 +346,17 @@ def get_training_data(limit: int) -> list: # list[(int, str, list[int])]
     # Get metrics for each domain without exception
     # Use the latest metrics table as a subquery to get the domain IDs
     sql_query = '''
-        SELECT d.domain_id, d.screenshot, GROUP_CONCAT(l.topic_id)
-        FROM domains AS d
+        SELECT d.screenshot, GROUP_CONCAT(l.topic_id)
+        FROM domains d
         INNER JOIN labels AS l ON d.domain_id = l.domain_id
+        INNER JOIN metrics AS m ON d.domain_id = m.domain_id
         INNER JOIN (
-            SELECT m.domain_id, m.start_time
-            FROM metrics AS m
-            WHERE m.exception IS NULL AND m.start_time = (
-                SELECT MAX(m2.start_time) 
-                FROM metrics AS m2
-                WHERE m2.domain_id = m.domain_id AND m2.exception IS NULL
-            )
-            
-        ) AS lm ON d.domain_id = lm.domain_id
+            SELECT domain_id, MAX(start_time) AS latest_start_time
+            FROM metrics
+            GROUP BY domain_id
+        ) subq ON d.domain_id = subq.domain_id AND m.start_time = subq.latest_start_time
         WHERE d.ignored IS FALSE
+            AND m.exception IS NULL
         GROUP BY d.domain_id
         ORDER BY d.ranking DESC
     '''
@@ -318,27 +365,19 @@ def get_training_data(limit: int) -> list: # list[(int, str, list[int])]
     if limit:
         sql_query += f" LIMIT {limit}"
 
-    print(sql_query)
-
-    os._exit(0)
-
     cur.execute(sql_query)
 
     rows = cur.fetchall()
     
     # rows now looks like this:
     # [
-    #     (1, 'screenshots/1.png', '1,2,3'),
-    #     (2, 'screenshots/2.png', '4,5,6'),
-    #     (3, 'screenshots/3.png', '7,8,9')
+    #     ('screenshots/1.png', '1,2,3'),
+    #     ('screenshots/2.png', '4,5,6'),
+    #     ('screenshots/3.png', '7,8,9')
     # ]
-    # where each tuple is a row from the database
-    # and the first element of each tuple is the domain ID
-    # the second element is the screenshot path
-    # and the third element is a comma-separated string of topic IDs
-    # parse the topic IDs into a list of integers
 
-    rows = [(row[0], [int(topic_id) for topic_id in row[2].split(',')]) for row in rows]
+
+    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')]) for row in rows]
 
     cur.close()
     conn.close()

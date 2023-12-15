@@ -1,7 +1,10 @@
 from PIL import Image
 import numpy as np
 import tensorflow as tf
+
+from keras.preprocessing.sequence import pad_sequences
 from sklearn.model_selection import train_test_split
+
 from tensorflow.keras import layers, models
 from tensorflow.keras.utils import plot_model
 import sys
@@ -10,35 +13,49 @@ import db
 
 INPUT_SIZE = 256
 
-# Function to load and preprocess images
-def load_training_data(limit: int = -1, img_size=(INPUT_SIZE, INPUT_SIZE)) -> (np.array, np.array):
+def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE), use_multiple_labels: bool = False) -> (np.ndarray, np.ndarray):
+    '''Loads and preprocesses images'''
     training_images = db.get_training_data(limit)
+    # training_images = [
+    #     ('screenshots/1.png', [1,2,3]),
+    #     ('screenshots/2.png', [4,5,6]),
+    #     ('screenshots/3.png', [7,8,9])
+    # ]
 
-    # Create an empty array to hold the images
-    images = np.array()
-    labels = np.array()
+    images = []
+    labels = []
 
     # Replace the path in each image with the actual image data
-    for entry in training_images:
+    for screenshot_path, domain_labels in training_images:
         # Load and resize the image
-        img_path = entry[0]
-        image = Image.open(img_path, 'r')
-        image = image.resize(img_size)
+        with Image.open(screenshot_path, 'r') as image:
+            resized_image = image.resize(img_size)
 
-        # Convert the image to a numpy array
-        image = np.array(image)
-
-        # Add the image to the array
-        images.append(image)
+            # Convert the image to a numpy array
+            images.append(np.array(resized_image))
 
         # Add the label to the array
-        labels.append(entry[1])
+        if use_multiple_labels:
+            labels.append(domain_labels)
+        else:
+            labels.append(domain_labels[0])
 
-    return (images, labels)
+    if use_multiple_labels:
+        # Pad the labels so they are all the same length
+        labels = pad_sequences(labels, padding='post')
+    else:
+        # Convert the labels to a numpy array
+        labels = np.array(labels)
 
-def get_model(input_size: int = INPUT_SIZE, ) -> models.Sequential:
+    return (np.array(images), labels)
+
+def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
+    '''Creates a convolutional neural network model'''
     # Define a simple CNN model
     topic_mapping_count = len(db.get_topics())
+
+    if topic_mapping_count == 0:
+        raise Exception("No topic mappings found in the database")
 
     model = models.Sequential([
         layers.Conv2D(32, (3, 3), activation='relu', input_shape=(input_size, input_size, 3)),
@@ -60,9 +77,11 @@ def get_model(input_size: int = INPUT_SIZE, ) -> models.Sequential:
     return model
 
 def make_model_diagram(model: models.Sequential):
+    '''Creates a diagram of the model'''
     plot_model(model, to_file='research_data/model.png', show_shapes=True, show_layer_names=True)
 
 def main():
+    '''Loads data and trains the model'''
     # Load and preprocess images and labels
     print("📷 Preparing images and labels...")
 

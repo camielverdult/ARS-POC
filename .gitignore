@@ -162,4 +162,5 @@ cython_debug/
 # Project specific ignores
 screenshots/*
 db-backups/*
-```
+.DS_Store
+*/.DS_Store
