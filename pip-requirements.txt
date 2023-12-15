@@ -1,0 +1,9 @@
+pandas # CSV
+selenium # Browser automation
+
+Pillow # Image processing
+numpy # Numerical Python
+scikit-learn # Machine learning
+
+matplotlib # Plotting
+pydot # Graphviz interface

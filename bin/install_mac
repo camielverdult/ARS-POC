@@ -1,0 +1,3 @@
+pip3 install tensorflow-macos
+pip3 install --user tensorflow-metal
+brew install geckodriver graphviz && pip3 install -r pip-requirements.txt

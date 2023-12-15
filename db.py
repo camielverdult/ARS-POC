@@ -1,0 +1,368 @@
+import os
+import shutil
+import sqlite3
+import sys
+import time
+
+import pandas as pd
+
+DB_FILENAME = 'screenshots.sqlite3'
+DOMAIN_AMOUNT = 200
+
+# These domains triggered MalwareBytes and contain Riskware, Trojans, Malvertising, are compromised, etc.
+# AKA bad stuff that we don't want to visit
+BAD_DOMAINS = ["e7z9t4x6a0v5mk3zo1a0xj2z7c6g8sa6js5z7s2c3h9x0s5fh3a6sjwb8q7m.xyz", "onlyindianx.cc", "tokyomotion.net", "heylink.me", "tamilyogi.plus", "zcswet.com", "bidmachine.io", "doodstream.io", "1024tera.com", "mobile-tracker-free.com", "yadongtube.net", "vlxx.moe", "ai-lawandorder.com"]
+
+def get_conn(filename=None):
+    if filename:
+        return sqlite3.connect(filename)
+    
+    return sqlite3.connect(DB_FILENAME)
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Create domains table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS domains (
+            domain_id INTEGER PRIMARY KEY, 
+            ranking INTEGER,
+            domain TEXT,
+            screenshot TEXT, 
+            ignored BOOLEAN DEFAULT FALSE
+        )
+    ''')
+
+    # JOIN optimalization: Create index on domain_id column in domains table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_domains_domain_id ON domains(domain_id)
+    ''')
+
+    # Index on ignored column in domains table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_domains_ignored ON domains(ignored);
+    ''')
+
+    # Create topics table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS topics
+        (topic_id INTEGER PRIMARY KEY, name TEXT)
+    ''')
+
+    # Create labels table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS labels
+        (domain_id INTEGER, topic_id INTEGER,
+         FOREIGN KEY(domain_id) REFERENCES domains(domain_id),
+         FOREIGN KEY(topic_id) REFERENCES topics(id))
+    ''')
+
+    # Create index on domain_id column in labels table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_labels_domain_id ON labels(domain_id)
+    ''')
+
+    # Create index on topic_id column in labels table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_topic_id ON labels(topic_id)
+    ''')
+
+    # Create table for screenshot (multi)processing metrics
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS metrics
+        (domain_id INTEGER, 
+         start_time TEXT, 
+         end_time TEXT, 
+         duration REAL, 
+         exception TEXT,
+         FOREIGN KEY(domain_id) REFERENCES domains(domain_id))
+    ''')
+
+    # JOIN optimalization: Create index on domain_id column in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_domain_id ON metrics(domain_id)
+    ''')
+
+    # Create index on start_time column being NULL in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_start_time ON metrics(start_time);
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def seed_domains():
+    # Read domains from CSV file
+    domains_df = pd.read_csv('tranco_N7VPW.csv', header=None)
+
+    # Connect to the database
+    init_db()
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Build SQL statement to bulk-insert domains with popularity ranking and domain URL keys into the database
+    print(f"📝 Inserting first {DOMAIN_AMOUNT} domains into the database...")
+    sql = "INSERT INTO domains (ranking, domain) VALUES "
+
+    # Grab domains from the CSV file
+    domains = domains_df[:DOMAIN_AMOUNT].values.tolist()
+
+    # Add the domains to the SQL statement that are not in the BAD_DOMAINS list
+    for domain in domains:
+        if domain[1] not in BAD_DOMAINS:
+            sql += f"({domain[0]}, '{domain[1]}'),"
+
+    # Remove the trailing comma
+    sql = sql[:-1]
+    
+    # Execute the SQL statement and check for errors
+    try:
+        cur.execute(sql)
+    except sqlite3.Error as e:
+        print(f"Error inserting domains: {e}")
+        exit(1)
+
+    # Commit the changes to the database
+    conn.commit()
+
+def seed_topics():
+    # Inject YML data into the database
+    init_db()
+
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Build SQL statement to bulk-insert topics into the database
+    print("📝 Inserting topics into the database...")
+
+    # Read the topics from the topics.yml file and convert to SQL statement
+    with open('topics.yml', 'r') as file:
+        lines = file.readlines()
+        for line in lines:
+            topic, topic_id = line.strip().split(':')
+            topic = topic.strip()
+            topic_id = topic_id.strip()
+            sql = f"INSERT INTO topics (topic_id, name) VALUES ({topic_id}, '{topic}')"
+            try:
+                cur.execute(sql)
+            except sqlite3.Error as e:
+                print(f"Error inserting topics: {e}")
+                exit(1)
+
+    # Commit the changes to the database
+    conn.commit()
+
+def seed():
+    init_db()
+    seed_domains()
+    seed_topics()
+
+def backup():
+    # Define backup directory
+    backup_dir = 'db-backups'
+
+    # Create the backup directory if it does not exist
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+
+    # Define the backup filename
+    backup_filename = os.path.join(backup_dir, f'{time.time()}.{DB_FILENAME}_backup')
+
+    print(f"💾 Backing up {DB_FILENAME} to {backup_filename}...")
+
+    # Copy the file to the backup location
+    shutil.copyfile(DB_FILENAME, backup_filename)
+
+def purge():
+    if os.path.exists(DB_FILENAME):
+        backup()
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        print("🗑️ Purging database... (keeping ignored domains!)")
+
+        # Drop all tables but keep ignored metrics
+        cur.execute("DROP TABLE IF EXISTS topics")
+        cur.execute("DROP TABLE IF EXISTS labels")
+
+        # Delete all metrics without an exception
+        cur.execute("DELETE FROM metrics WHERE exception IS NULL")
+
+        # Delete domains that don't have an exception
+        cur.execute("DELETE FROM domains WHERE domain_id NOT IN (SELECT domain_id FROM metrics)")
+
+        # Drop indexes
+        cur.execute("DROP INDEX IF EXISTS idx_ignored")
+        cur.execute("DROP INDEX IF EXISTS idx_domain_id")
+        cur.execute("DROP INDEX IF EXISTS idx_topic_id")
+        cur.execute("DROP INDEX IF EXISTS idx_start_time_null")
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+    # Backup the screenshots directory
+    if os.path.exists('screenshots'):
+        backup_dir = 'screenshots-backups'
+
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+
+        print(f"💾 Backing up screenshots to {backup_dir}...")
+        shutil.copytree('screenshots', backup_dir)
+        
+        print("🗑️ Purging screenshots directory...")
+        shutil.rmtree('screenshots')
+
+def get_topics() -> list:
+    """Returns a list of topics from the database"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get all topics
+    cur.execute('SELECT * FROM topics')
+
+    # Convert the topics to a list
+    topics = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return topics
+
+def get_unprocssed_domains() -> list[int]:
+    """Returns a list of domain IDs that have not been processed yet and are not ignored or have had an exception."""
+
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Check if we have an empty metrics table, because then we need to process all domains
+    cur.execute("SELECT COUNT(*) FROM metrics")
+    metrics_count = cur.fetchone()[0]
+
+    # If the metrics table is empty, we need to process all domains
+    if metrics_count == 0:
+        # Get all domain IDs that are not ignored and not in the BAD_DOMAINS list
+        sql_query = f"""
+            SELECT domain_id FROM domains
+        """
+    else:
+        # Get all domain IDs that have not been processed yet and are not ignored or have had a timeout exception
+        sql_query = f"""
+            SELECT DISTINCT d.domain_id 
+            FROM domains d
+            LEFT JOIN metrics m ON d.domain_id = m.domain_id
+            WHERE (m.start_time IS NULL OR m.start_time < datetime('now', '-1 day'))
+            AND (d.ignored IS FALSE)
+            AND (m.exception IS NULL OR m.exception = 'timeout')
+        """
+
+    # Execute the query
+    cur.execute(sql_query)
+    unprocessed_domain_ids = [row[0] for row in cur.fetchall()]
+
+    cur.close()
+    conn.close()
+
+    return unprocessed_domain_ids
+
+def get_training_data(limit: int) -> list: # list[(int, str, list[int])]
+    """Returns the id, screenshot path and labels/topics for all labeled domains"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # There might be multiple topics per domain, so we need to group them into a list
+    # We also need to ignore domains that:
+    # - have been marked as ignored
+    # - have not been processed yet
+    # - have had an exception
+    # There may be multiple metrics per domain, so we need to find the latest metric per domain
+    # We want to collect multiple topics per domain, so we need to group them into a list
+
+    # Verify tables that we join in the query are not empty
+    cur.execute("SELECT COUNT(*) FROM domains")
+    domains_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM labels")
+    labels_count = cur.fetchone()[0]
+
+    if domains_count == 0 or labels_count == 0:
+        print("🚨 Missing domains or labels in the database!")
+        exit(1)
+
+    # Get metrics for each domain without exception
+    # Use the latest metrics table as a subquery to get the domain IDs
+    sql_query = '''
+        SELECT d.domain_id, d.screenshot, GROUP_CONCAT(l.topic_id)
+        FROM domains AS d
+        INNER JOIN labels AS l ON d.domain_id = l.domain_id
+        INNER JOIN (
+            SELECT m.domain_id, m.start_time
+            FROM metrics AS m
+            WHERE m.exception IS NULL AND m.start_time = (
+                SELECT MAX(m2.start_time) 
+                FROM metrics AS m2
+                WHERE m2.domain_id = m.domain_id AND m2.exception IS NULL
+            )
+            
+        ) AS lm ON d.domain_id = lm.domain_id
+        WHERE d.ignored IS FALSE
+        GROUP BY d.domain_id
+        ORDER BY d.ranking DESC
+    '''
+
+    # Limit the amount of domains to the specified limit
+    if limit:
+        sql_query += f" LIMIT {limit}"
+
+    print(sql_query)
+
+    os._exit(0)
+
+    cur.execute(sql_query)
+
+    rows = cur.fetchall()
+    
+    # rows now looks like this:
+    # [
+    #     (1, 'screenshots/1.png', '1,2,3'),
+    #     (2, 'screenshots/2.png', '4,5,6'),
+    #     (3, 'screenshots/3.png', '7,8,9')
+    # ]
+    # where each tuple is a row from the database
+    # and the first element of each tuple is the domain ID
+    # the second element is the screenshot path
+    # and the third element is a comma-separated string of topic IDs
+    # parse the topic IDs into a list of integers
+
+    rows = [(row[0], [int(topic_id) for topic_id in row[2].split(',')]) for row in rows]
+
+    cur.close()
+    conn.close()
+
+    return rows
+
+if __name__ == '__main__':
+    # Check arguments
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
+        exit(1)
+
+    # Parse arguments
+    command = sys.argv[1]
+
+    # Run command
+    if command == 'init':
+        init_db()
+    elif command == 'seed':
+        seed()
+    elif command == 'backup':
+        backup()
+    elif command == 'purge':
+        purge()
+    else:
+        print(f"Unknown command: {command}")
+        exit(1)
