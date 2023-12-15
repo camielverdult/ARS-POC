@@ -29,7 +29,8 @@ def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE), use
     for screenshot_path, domain_labels in training_images:
         # Load and resize the image
         with Image.open(screenshot_path, 'r') as image:
-            resized_image = image.resize(img_size)
+            rgb_image = image.convert('RGB')
+            resized_image = rgb_image.resize(img_size)
 
             # Convert the image to a numpy array
             images.append(np.array(resized_image))
@@ -92,11 +93,9 @@ def main():
     print("📊 Preparing test and training datasets...")
     images_train, images_test, labels_train, labels_test = train_test_split(images, labels, test_size=0.2, random_state=42)
 
-    topic_mappings = db.get_topics()
-
     # Define a simple CNN model
     print("🦾 Building model...")
-    model = get_model(len(topic_mappings))
+    model = get_model()
 
     # Train the model
     print("🦾 Training model...")
