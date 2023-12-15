@@ -193,39 +193,22 @@ def screenshot_domains():
     cur = conn.cursor()
 
     # Query for how many pictures were taken
-    cur.execute("SELECT COUNT(*) FROM domains WHERE screenshot IS NOT NULL")
-    num_pictures = cur.fetchone()[0]
+    num_pictures = db.get_count("domains", "screenshot IS NOT NULL", cur)
 
-    if num_pictures is None:
-        num_pictures = 0
+    # Query for how many pictures were taken
+    num_pictures = db.get_count("domains", "COUNT(*)", "screenshot IS NOT NULL", cur)
 
     # Query for how long it took to take screenshots virtually
-    cur.execute("SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NULL")
-    virtual_time = cur.fetchone()[0]
-
-    if virtual_time is None:
-        virtual_time = 0
+    virtual_time = db.get_count("metrics", "SUM(end_time - start_time)", "exception IS NULL", cur)
 
     # Find the number of domains that were skipped
-    cur.execute("SELECT COUNT(*) FROM metrics WHERE exception IS NOT NULL")
-    skipped_domains = cur.fetchone()[0]
+    skipped_domains = db.get_count("metrics", "COUNT(*)", "exception IS NOT NULL", cur)
 
-    if skipped_domains is None:
-        skipped_domains = 0
-
-    # Find the average virtual time it took to take a succesful screenshot
-    cur.execute("SELECT AVG(end_time - start_time) FROM metrics WHERE exception IS NULL")
-    avg_duration = cur.fetchone()[0]
-
-    if avg_duration is None:
-        avg_duration = 0
+    # Find the average virtual time it took to take a successful screenshot
+    avg_duration = db.get_count("metrics", "AVG(end_time - start_time)", "exception IS NULL", cur)
 
     # Find the lost time due to errors
-    cur.execute("SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NOT NULL")
-    time_lost = cur.fetchone()[0]
-
-    if time_lost is None:
-        time_lost = 0
+    time_lost = db.get_count("metrics", "SUM(end_time - start_time)", "exception IS NOT NULL", cur)
 
     # Print capturing results
     print(f"🕑 Took {total_time:.1f} real & {virtual_time:.1f} virtual seconds to take {num_pictures} screenshots ({skipped_domains} skipped, {avg_duration:.1f} avg. threaded sec/pic, {time_lost:.1f} threaded seconds lost on exceptions)")

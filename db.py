@@ -20,6 +20,53 @@ def get_conn(filename=None):
     
     return sqlite3.connect(DB_FILENAME)
 
+def get_count(table_name: str, cur: sqlite3.Cursor = None, select: str = None, where: str = None, error_callback_fn = None) -> int:
+    """Returns the amount of rows in a table"""
+
+    # Allow for row operation in select
+    if not select:
+        select = "*"
+
+    # Format the WHERE clause
+    if where:
+        where = f" WHERE {where}"
+    else:
+        where = ""
+
+    # Track if we started the cursor
+    cur_started = False
+
+    # Use the passed cursor or create a new one
+    if not cur:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur_started = True
+
+    # Use the passed error callback or use a default
+    if not error_callback_fn:
+        def _error_callback(error: str):
+            print(f"🚨 Error getting {table_name} count: {error}")
+            os._exit(1)
+        error_callback_fn = _error_callback
+
+    # Run the query
+    cur.execute(f"SELECT COUNT({select}) FROM {table_name}{where}")
+    count = cur.fetchone()
+
+    if not count:
+        # No rows in the table
+        count = -1
+        error_callback_fn(table_name, "COUNT(*) returned None")
+    else:
+        # Get the first column of the first row from the result
+        count = count[0]
+
+    if cur_started:
+        cur.close()
+        conn.close()
+
+    return count
+
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -87,6 +134,51 @@ def init_db():
     # Create index on start_time column being NULL in metrics table
     cur.execute('''
         CREATE INDEX IF NOT EXISTS idx_metrics_start_time ON metrics(start_time);
+    ''')
+
+    # Create a tabel that logs each program session
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS sessions
+        (session_id INTEGER PRIMARY KEY, 
+         start_time TEXT,
+         end_time TEXT,
+         device_info TEXT,
+         bandwidth_used INTEGER
+        )
+    ''')
+
+    conn.commit()
+
+    # Get new cursor
+    cur = conn.cursor()
+
+    # JOIN optimalization: Create index on session_id column in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_session_id ON sessions(session_id)
+    ''')
+
+    # JOIN optimalization: Create index on session_id column in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_session_id ON metrics(session_id)
+    ''')
+
+    # Tabel for joining metrics and sessions
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS metrics_sessions
+        (session_id INTEGER, 
+         domain_id INTEGER,
+         FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+         FOREIGN KEY(domain_id) REFERENCES domains(domain_id))
+    ''')
+
+    # JOIN optimalization: Create index on session_id column in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_session_id ON metrics(session_id)
+    ''')
+
+    # JOIN optimalization: Create index on domain_id column in metrics table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_metrics_domain_id ON metrics(domain_id)
     ''')
     
     conn.commit()
@@ -161,10 +253,8 @@ def seed_labels():
     cur = conn.cursor()
 
     # Check if topics and domains tables are empty
-    cur.execute("SELECT COUNT(*) FROM topics")
-    topics_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM domains")
-    domains_count = cur.fetchone()[0]
+    topics_count = get_count('topics', cur)
+    domains_count = get_count('domains', cur)
 
     if topics_count == 0 or domains_count == 0:
         print("🚨 Missing topics or domains in the database!")
@@ -282,13 +372,11 @@ def get_unprocssed_domains() -> (list[int], str):
     cur = conn.cursor()
 
     # Check if we have an empty metrics table, because then we need to process all domains
-    cur.execute("SELECT COUNT(*) FROM metrics")
-    metrics_count = cur.fetchone()[0]
+    metrics_count = get_count('metrics', cur)
 
     # Check if the amount of metrics we have is less than the amount of domains we have
     # If so, we need to process all domains
-    cur.execute(f"SELECT COUNT(*) FROM domains LIMIT {metrics_count}")
-    domains_count = cur.fetchone()[0]
+    domains_count = get_count('domains', cur)
 
     description = ""
 
@@ -334,10 +422,8 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     # We want to collect multiple topics per domain, so we need to group them into a list
 
     # Verify tables that we join in the query are not empty
-    cur.execute("SELECT COUNT(*) FROM domains")
-    domains_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM labels")
-    labels_count = cur.fetchone()[0]
+    domains_count = get_count('domains', cur)
+    labels_count = get_count('labels', cur)
 
     if domains_count == 0 or labels_count == 0:
         print("🚨 Missing domains or labels in the database!")
