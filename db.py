@@ -364,7 +364,7 @@ def get_topics() -> list:
 
     return topics
 
-def get_unprocssed_domains() -> (list[int], str):
+def get_unprocessed_domains() -> (list[int], str):
     """Returns a list of domain IDs that have not been processed yet and are not ignored or have had an exception."""
 
     # Connect to the database

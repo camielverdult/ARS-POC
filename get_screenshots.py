@@ -6,6 +6,7 @@ import time
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.common import exceptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 # from train import INPUT_SIZE
@@ -56,6 +57,7 @@ def take_screenshots(domain_ids: list):
     # Map domain_id to domain
     domain_mapping = {row[0]: row[1] for row in cur.fetchall()}
 
+    # Exception handling for the process running this function 
     try:
         for domain_id, domain_url in domain_mapping.items():
             filename = get_screenshot_path_for_domain(domain_url)
@@ -64,6 +66,7 @@ def take_screenshots(domain_ids: list):
             start_time = time.time()
             exception_type = None
 
+            # Exception handling for the domain being processed
             try:
                 driver.get(f"https://{domain_url}")
                 time.sleep(4)
@@ -96,40 +99,39 @@ def take_screenshots(domain_ids: list):
 
                     print(f"📷 {domain_url}")
                     driver.save_screenshot(filename)
-            except Exception as e:
-                # Handle exceptions, we need to use strings here instead of types because of selenium
-                error_type = str(type(e))
-                
-                if "TimeoutException" in error_type:
-                    filename = None  # Set filename to None if screenshot failed
-                    exception_type = "timeout" # Set exception type to timeout
-                elif "WebDriverException" in error_type:
-                    error = str(e).lower()
-                    if "timeout" in error:
-                        filename = None 
-                        exception_type = "timeout"
-                        print(f"🌐 {domain_url} (timeout error)")
-                    elif "dnsNotFound" in error:
-                        filename = None
-                        ignored = True # Ignore this domain in the future
-                        exception_type = "dnsNotFound"
-                        print(f"🤖 {domain_url} (ignored in future)")
-                    elif "neterror" in error:
-                        filename = None
-                        exception_type = "neterror"
-                        print(f"🌐 {domain_url} (network error)")
-                    elif "InsecureCertificateError" in error:
-                        filename = None
-                        ignored = True
-                        exception_type = "insecure"
-                        print(f"🤔 {domain_url} (insecure, ignored in future)")
-                    else:
-                        print(f"Error taking screenshot for {domain_url}: {type(e)}\n{e}")
-                        exception_type = "unknown"
-                        filename = None
+            except exceptions.TimeoutException:
+                filename = None  # Set filename to None if screenshot failed
+                exception_type = "timeout" # Set exception type to timeout
+            except exceptions.WebDriverException as e:
+                error = str(e).lower()
+                # print(f"{type(e)}.{e}")
+                if "timeout" in error:
+                    filename = None 
+                    exception_type = "timeout"
+                    print(f"🌐 {domain_url} (timeout error)")
+                elif "dnsNotFound" in error:
+                    filename = None
+                    ignored = True # Ignore this domain in the future
+                    exception_type = "dnsNotFound"
+                    print(f"🤖 {domain_url} (ignored in future)")
+                elif "neterror" in error:
+                    filename = None
+                    exception_type = "neterror"
+                    print(f"🌐 {domain_url} (network error)")
+                elif "InsecureCertificateError" in error:
+                    filename = None
+                    ignored = True
+                    exception_type = "insecure"
+                    print(f"🤔 {domain_url} (insecure, ignored in future)")
                 else:
+                    # Error taking screenshot for yandex.net: <class 'selenium.common.exceptions.WebDriverException'>
+                    print(f"Error taking screenshot for {domain_url}: {type(e)}\n{e}")
                     exception_type = "unknown"
-                    print(f"Unexpected error when taking screenshot for {domain_url}: {e}")
+                    filename = None
+            except Exception as e:
+                # Some other exception
+                exception_type = "unknown"
+                print(f"Unexpected error when taking screenshot for {domain_url}: {e}")
 
             if ignored:
                 filename = None
@@ -160,11 +162,14 @@ def chunker(seq, size):
     return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
 def screenshot_domains():
+    if not os.path.exists(db.DB_FILENAME):
+        db.seed()
+
     # Get start time for benchmarking
     start_time = time.time()
 
     # Fetch domain IDs that are not ignored
-    domain_ids, description = db.get_unprocssed_domains()
+    domain_ids, description = db.get_unprocessed_domains()
 
     if not domain_ids: # <=> len(domain_ids) == 0
         print("🎉 All domains have already been processed!")
@@ -174,8 +179,9 @@ def screenshot_domains():
     if not os.path.exists('screenshots'):
         os.makedirs('screenshots')
 
-    # Define the number of processes and chunk size for multiprocessing
-    num_processes = int(multiprocessing.cpu_count() * BROWSERS_PER_CORE) # TODO: find upper limit of num_processes
+    # Define the number of processes and chunk size for multiprocessing, based on the number of cores in the system
+    # The number of processes will not exceed over 16 due to memory constraints
+    num_processes = min(16, int(multiprocessing.cpu_count() * BROWSERS_PER_CORE)) # TODO: find upper limit of num_processes
     chunk_size = len(domain_ids) // num_processes + (len(domain_ids) % num_processes > 0)
 
     # Use multiprocessing to take screenshots
@@ -217,7 +223,6 @@ def screenshot_domains():
     conn.close()
 
 def main():
-    db.init_db()    
     screenshot_domains()
 
 if __name__ == "__main__":
