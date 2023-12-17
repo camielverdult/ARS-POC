@@ -58,6 +58,14 @@ def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
     if topic_mapping_count == 0:
         raise Exception("No topic mappings found in the database")
 
+    '''
+        If you have a binary classification problem(i.e., your labels are 
+        either 0 or 1), you should ensure that the last layer of your model has
+        only one neuron and uses a sigmoid activation function. If you have a 
+        multi-class classification problem, the last layer should have as many 
+        neurons as there are classes, and you should use a softmax activation 
+        function.
+    '''
     model = models.Sequential([
         layers.Conv2D(32, (3, 3), activation='relu', input_shape=(input_size, input_size, 3)),
         layers.MaxPooling2D((2, 2)),
