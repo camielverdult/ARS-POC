@@ -160,7 +160,7 @@ cython_debug/
 #.idea/
 
 # Project specific ignores
-screenshots/*
+screenshot*/*
 db-backups/*
 .DS_Store
 */.DS_Store
