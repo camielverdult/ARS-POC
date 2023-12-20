@@ -67,6 +67,95 @@ def get_count(table_name: str, cur: sqlite3.Cursor = None, select: str = None, w
 
     return count
 
+def start_session(device_info: str) -> int:
+    """Starts a new session and returns the session ID"""
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get the session ID and device info
+    cur.execute("INSERT INTO sessions (start_time, device_info) VALUES (datetime('now'), ?)", (device_info,))
+    conn.commit()
+
+    # Get the session ID
+    session_id = cur.lastrowid
+
+    cur.close()
+    conn.close()
+
+    return session_id
+
+import sqlite3
+import os
+
+def get_latest_session_id(cur: sqlite3.Cursor = None) -> int:
+    """Returns the latest session ID"""
+    # Connect to the database
+    cur_started = False
+    if not cur:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur_started = True
+
+    # Get the session ID and device info
+    cur.execute("SELECT session_id FROM sessions WHERE start_time = (SELECT MAX(start_time) FROM sessions WHERE end_time IS NULL)")
+
+    # Get the session ID
+    session_id = cur.fetchone()[0]
+
+    if cur_started:
+        cur.close()
+        conn.close()
+
+    return session_id
+
+def get_session_metrics(session_id) -> dict:
+    """Returns the session data including various metrics for the latest session."""
+
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    session_start_time = cur.execute(f"SELECT start_time FROM sessions WHERE session_id = {session_id}").fetchone()[0]
+
+    # Construct the query to fetch metrics for the specific session
+    query = f"""
+            SELECT 
+                (SELECT COUNT(*) FROM domains WHERE screenshot IS NOT NULL AND session_id = '{session_id}') AS num_pictures,
+                (SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NULL AND start_time >= '{session_start_time}') AS virtual_time,
+                (SELECT COUNT(*) FROM metrics WHERE exception IS NOT NULL AND start_time >= '{session_start_time}') AS skipped_domains,
+                (SELECT AVG(end_time - start_time) FROM metrics WHERE exception IS NULL AND start_time >= '{session_start_time}') AS avg_duration,
+                (SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NOT NULL AND start_time >= '{session_start_time}') AS time_lost
+            """
+
+    cur.execute(query)
+    num_pictures, virtual_time, skipped_domains, avg_duration, time_lost = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return {
+        "session_id": session_id,
+        "num_pictures": num_pictures,
+        "virtual_time": virtual_time,
+        "skipped_domains": skipped_domains,
+        "avg_duration": avg_duration,
+        "time_lost": time_lost
+    }
+
+def end_session(session_id: int, bandwidth_used: int):
+    """Ends a session"""
+    # Connect to the database
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get the session ID and device info
+    cur.execute("UPDATE sessions SET end_time = datetime('now'), bandwidth_used = ? WHERE session_id = ?", (bandwidth_used, session_id))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
 def init_db():
     conn = get_conn()
     cur = conn.cursor()

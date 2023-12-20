@@ -1,4 +1,4 @@
-import datetime
+import platform
 import os
 import multiprocessing
 import pathlib
@@ -49,6 +49,8 @@ def take_screenshots(domain_ids: list):
     driver = setup_driver()
     conn = db.get_conn()
     cur = conn.cursor()
+
+    session_id = db.get_latest_session_id(cur)
 
     # Get both domain_id and domain
     query = "SELECT domain_id, domain FROM domains WHERE domain_id IN ({})".format(','.join('?' * len(domain_ids)))
@@ -149,6 +151,11 @@ def take_screenshots(domain_ids: list):
                 (domain_id, start_time, end_time, exception_type)
             )
 
+            cur.execute(
+                "INSERT INTO metrics_sessions (session_id, domain_id) VALUES (?, ?)",
+                (session_id, domain_id)
+            )
+
             conn.commit()
     except Exception as e:
         print(f"Error in Process: {e}")
@@ -164,6 +171,9 @@ def chunker(seq, size):
 def screenshot_domains():
     if not os.path.exists(db.DB_FILENAME):
         db.seed()
+
+    # Create session with given hardware info
+    session_id = db.start_session(device_info=platform.platform())
 
     # Get start time for benchmarking
     start_time = time.time()
@@ -190,37 +200,23 @@ def screenshot_domains():
         for _ in pool.imap_unordered(take_screenshots, chunker(domain_ids, chunk_size)):
             pass
 
+    db.end_session(session_id, 1)
+
     # Get end time for benchmarking
     end_time = time.time()
     total_time = end_time - start_time
 
-    # Find the average time it took to take a screenshot that has no exceptions
-    conn = db.get_conn()
-    cur = conn.cursor()
-
-    # Query for how many pictures were taken
-    num_pictures = db.get_count("domains", "screenshot IS NOT NULL", cur)
-
-    # Query for how many pictures were taken
-    num_pictures = db.get_count("domains", "COUNT(*)", "screenshot IS NOT NULL", cur)
-
-    # Query for how long it took to take screenshots virtually
-    virtual_time = db.get_count("metrics", "SUM(end_time - start_time)", "exception IS NULL", cur)
-
-    # Find the number of domains that were skipped
-    skipped_domains = db.get_count("metrics", "COUNT(*)", "exception IS NOT NULL", cur)
-
-    # Find the average virtual time it took to take a successful screenshot
-    avg_duration = db.get_count("metrics", "AVG(end_time - start_time)", "exception IS NULL", cur)
-
-    # Find the lost time due to errors
-    time_lost = db.get_count("metrics", "SUM(end_time - start_time)", "exception IS NOT NULL", cur)
+    # Get metrics for the session
+    session_metrics = db.get_session_metrics(session_id)
+    session_id = session_metrics["session_id"]
+    num_pictures = session_metrics["num_pictures"]
+    virtual_time = session_metrics["virtual_time"]
+    skipped_domains = session_metrics["skipped_domains"]
+    avg_duration = session_metrics["avg_duration"]
+    time_lost = session_metrics["time_lost"]
 
     # Print capturing results
     print(f"🕑 Took {total_time:.1f} real & {virtual_time:.1f} virtual seconds to take {num_pictures} screenshots ({skipped_domains} skipped, {avg_duration:.1f} avg. threaded sec/pic, {time_lost:.1f} threaded seconds lost on exceptions)")
-    
-    cur.close()
-    conn.close()
 
 def main():
     screenshot_domains()
