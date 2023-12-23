@@ -8,7 +8,7 @@ import yaml
 import pandas as pd
 
 DB_FILENAME = 'screenshots.sqlite3'
-DOMAIN_AMOUNT = 200
+DOMAIN_AMOUNT = 16
 
 # These domains triggered MalwareBytes and contain Riskware, Trojans, Malvertising, are compromised, etc.
 # AKA bad stuff that we don't want to visit
@@ -120,16 +120,37 @@ def get_session_metrics(session_id) -> dict:
 
     # Construct the query to fetch metrics for the specific session
     query = f"""
-            SELECT 
-                (SELECT COUNT(*) FROM domains WHERE screenshot IS NOT NULL AND session_id = '{session_id}') AS num_pictures,
-                (SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NULL AND start_time >= '{session_start_time}') AS virtual_time,
-                (SELECT COUNT(*) FROM metrics WHERE exception IS NOT NULL AND start_time >= '{session_start_time}') AS skipped_domains,
-                (SELECT AVG(end_time - start_time) FROM metrics WHERE exception IS NULL AND start_time >= '{session_start_time}') AS avg_duration,
-                (SELECT SUM(end_time - start_time) FROM metrics WHERE exception IS NOT NULL AND start_time >= '{session_start_time}') AS time_lost
-            """
+        SELECT 
+            (SELECT COUNT(*) FROM domains d 
+            INNER JOIN metrics_sessions ms ON d.domain_id = ms.domain_id
+            WHERE d.screenshot IS NOT NULL AND ms.session_id = {session_id}) AS num_pictures,
+            (SELECT SUM(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
+            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
+            WHERE m.exception IS NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS virtual_time,
+            (SELECT COUNT(*) FROM metrics m
+            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
+            WHERE m.exception IS NOT NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS skipped_domains,
+            (SELECT AVG(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
+            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
+            WHERE m.exception IS NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS avg_duration,
+            (SELECT SUM(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
+            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
+            WHERE m.exception IS NOT NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS time_lost
+    """
 
     cur.execute(query)
     num_pictures, virtual_time, skipped_domains, avg_duration, time_lost = cur.fetchone()
+
+    # Check for none
+    for metric in [num_pictures, virtual_time, skipped_domains, avg_duration, time_lost]:
+        match metric:
+            case None:
+                print("🚨 Error getting session metrics: None value found!")
+                metric = 0
+            case _:
+                metric = metric
+            
+        
 
     cur.close()
     conn.close()

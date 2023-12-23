@@ -89,7 +89,7 @@ def make_model_diagram(model: models.Sequential):
     '''Creates a diagram of the model'''
     plot_model(model, to_file='research_data/model.png', show_shapes=True, show_layer_names=True)
 
-def main():
+def train():
     '''Loads data and trains the model'''
     # Load and preprocess images and labels
     print("📷 Preparing images and labels...")
@@ -115,4 +115,4 @@ if __name__ == "__main__":
         model = get_model()
         make_model_diagram(model)
     else:
-        main()
+        train()

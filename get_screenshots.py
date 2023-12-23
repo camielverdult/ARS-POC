@@ -4,6 +4,7 @@ import multiprocessing
 import pathlib
 import time
 
+import psutil
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common import exceptions
@@ -40,6 +41,24 @@ def setup_driver():
     driver.set_window_size(WINDOW_SIZE, WINDOW_SIZE)
     
     return driver
+
+def calc_process_count():
+    # Get the number of CPU cores
+    cpu_cores = psutil.cpu_count(logical=True)
+
+    # Get the total memory and calculate the available memory (considering 70% usage)
+    total_memory = psutil.virtual_memory().total / (1024 ** 3)  # Convert bytes to GB
+    available_memory = total_memory * 0.8  # Assuming 85% of memory is available for processes
+
+    # Estimate memory usage per process (in GB) - adjust based on your observation
+    memory_per_process = 1.5
+
+    # Calculate the number of processes based on CPU cores and memory
+    processes_based_on_cpu = cpu_cores
+    processes_based_on_memory = int(available_memory / memory_per_process)
+
+    # Return the minimum of the two calculations as the optimal process count
+    return min(processes_based_on_cpu, processes_based_on_memory)
 
 def get_screenshot_path_for_domain(domain: str) -> str:
     domain_name = domain.replace('.', '-')
@@ -191,7 +210,7 @@ def screenshot_domains():
 
     # Define the number of processes and chunk size for multiprocessing, based on the number of cores in the system
     # The number of processes will not exceed over 16 due to memory constraints
-    num_processes = min(16, int(multiprocessing.cpu_count() * BROWSERS_PER_CORE)) # TODO: find upper limit of num_processes
+    num_processes = calc_process_count() # TODO: find upper limit of num_processes
     chunk_size = len(domain_ids) // num_processes + (len(domain_ids) % num_processes > 0)
 
     # Use multiprocessing to take screenshots

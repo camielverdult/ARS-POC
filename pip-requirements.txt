@@ -7,3 +7,5 @@ scikit-learn # Machine learning
 
 matplotlib # Plotting
 pydot # Graphviz interface
+psutil # System monitoring
+pyaml # YAML
