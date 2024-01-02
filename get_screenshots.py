@@ -164,15 +164,16 @@ def take_screenshots(domain_ids: list):
 
             end_time = time.time()
 
-            # Insert screenshot process metrics
+            # Insert screenshot process metrics and retrieve the ID
             cur.execute(
                 "INSERT INTO metrics (domain_id, start_time, end_time, exception) VALUES (?, ?, ?, ?)",
                 (domain_id, start_time, end_time, exception_type)
             )
 
+            # Insert session ID and domain ID into metrics_sessions table
             cur.execute(
-                "INSERT INTO metrics_sessions (session_id, domain_id) VALUES (?, ?)",
-                (session_id, domain_id)
+                "INSERT INTO metrics_sessions (session_id, metric_id) VALUES (?, ?)",
+                (session_id, cur.lastrowid)
             )
 
             conn.commit()

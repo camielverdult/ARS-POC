@@ -109,48 +109,44 @@ def get_latest_session_id(cur: sqlite3.Cursor = None) -> int:
 
     return session_id
 
-def get_session_metrics(session_id) -> dict:
-    """Returns the session data including various metrics for the latest session."""
+def get_session_metrics(session_id: int) -> dict:
+    """Returns the session data including various metrics for the specific session."""
 
     # Connect to the database
     conn = get_conn()
     cur = conn.cursor()
 
-    session_start_time = cur.execute(f"SELECT start_time FROM sessions WHERE session_id = {session_id}").fetchone()[0]
+    # Get the session start time
+    session_start_time = cur.execute(f"SELECT start_time FROM sessions WHERE session_id = {session_id}").fetchone()
+    if not session_start_time:
+        print(f"🚨 Error getting session metrics: session start time is None for session ID {session_id}!")
+        os._exit(1)
 
-    # Construct the query to fetch metrics for the specific session
+    session_start_time = session_start_time[0]
+
+    # Construct the query to fetch all metrics for the specific session
     query = f"""
         SELECT 
-            (SELECT COUNT(*) FROM domains d 
-            INNER JOIN metrics_sessions ms ON d.domain_id = ms.domain_id
-            WHERE d.screenshot IS NOT NULL AND ms.session_id = {session_id}) AS num_pictures,
-            (SELECT SUM(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
-            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
-            WHERE m.exception IS NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS virtual_time,
-            (SELECT COUNT(*) FROM metrics m
-            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
-            WHERE m.exception IS NOT NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS skipped_domains,
-            (SELECT AVG(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
-            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
-            WHERE m.exception IS NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS avg_duration,
-            (SELECT SUM(strftime('%s', m.end_time) - strftime('%s', m.start_time)) FROM metrics m
-            INNER JOIN metrics_sessions ms ON m.domain_id = ms.domain_id
-            WHERE m.exception IS NOT NULL AND strftime('%s', m.start_time) >= strftime('%s', '{session_start_time}') AND ms.session_id = {session_id}) AS time_lost
+            COUNT(DISTINCT CASE WHEN d.screenshot IS NOT NULL THEN m.metric_id END) AS num_pictures,
+            SUM(CASE WHEN m.exception IS NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS virtual_time,
+            COUNT(CASE WHEN m.exception IS NOT NULL THEN m.metric_id END) AS skipped_domains,
+            AVG(CASE WHEN m.exception IS NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS avg_duration,
+            SUM(CASE WHEN m.exception IS NOT NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS time_lost
+        FROM metrics m
+        INNER JOIN metrics_sessions ms ON m.metric_id = ms.metric_id
+        INNER JOIN domains d ON m.domain_id = d.domain_id
+        WHERE ms.session_id = {session_id}
     """
 
     cur.execute(query)
     num_pictures, virtual_time, skipped_domains, avg_duration, time_lost = cur.fetchone()
 
-    # Check for none
-    for metric in [num_pictures, virtual_time, skipped_domains, avg_duration, time_lost]:
-        match metric:
-            case None:
-                print("🚨 Error getting session metrics: None value found!")
-                metric = 0
-            case _:
-                metric = metric
-            
-        
+    # Check for none and assign default value of 0
+    num_pictures = num_pictures or 0
+    virtual_time = virtual_time or 0
+    skipped_domains = skipped_domains or 0
+    avg_duration = avg_duration or 0
+    time_lost = time_lost or 0
 
     cur.close()
     conn.close()
@@ -177,8 +173,8 @@ def end_session(session_id: int, bandwidth_used: int):
     cur.close()
     conn.close()
 
-def init_db():
-    conn = get_conn()
+def init_db(filename: str = None):
+    conn = get_conn(filename)
     cur = conn.cursor()
 
     # Create domains table
@@ -229,7 +225,8 @@ def init_db():
     # Create table for screenshot (multi)processing metrics
     cur.execute('''
         CREATE TABLE IF NOT EXISTS metrics
-        (domain_id INTEGER, 
+        (metric_id INTEGER PRIMARY KEY,
+         domain_id INTEGER, 
          start_time TEXT,
          end_time TEXT,
          exception TEXT,
@@ -276,9 +273,9 @@ def init_db():
     cur.execute('''
         CREATE TABLE IF NOT EXISTS metrics_sessions
         (session_id INTEGER, 
-         domain_id INTEGER,
+         metric_id INTEGER,
          FOREIGN KEY(session_id) REFERENCES sessions(session_id),
-         FOREIGN KEY(domain_id) REFERENCES domains(domain_id))
+         FOREIGN KEY(metric_id) REFERENCES metrics(metric_id))
     ''')
 
     # JOIN optimalization: Create index on session_id column in metrics table
@@ -321,7 +318,7 @@ def seed_domains():
         cur.execute(sql)
     except sqlite3.Error as e:
         print(f"Error inserting domains: {e}")
-        exit(1)
+        os._exit(1)
 
     # Commit the changes to the database
     conn.commit()
@@ -349,7 +346,7 @@ def seed_topics():
                 cur.execute(sql)
             except sqlite3.Error as e:
                 print(f"Error inserting topics: {e}")
-                exit(1)
+                os._exit(1)
 
     # Commit the changes to the database
     conn.commit()
@@ -368,7 +365,7 @@ def seed_labels():
 
     if topics_count == 0 or domains_count == 0:
         print("🚨 Missing topics or domains in the database!")
-        exit(1)
+        os._exit(1)
 
     # Build SQL statement to bulk-insert labels into the database
     print("📝 Inserting labels into the database...")
@@ -386,7 +383,7 @@ def seed_labels():
                 cur.execute(sql)
             except sqlite3.Error as e:
                 print(f"Error inserting labels: {e}")
-                exit(1)
+                os._exit(1)
 
     # Commit the changes to the database
     conn.commit()
@@ -537,7 +534,7 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
 
     if domains_count == 0 or labels_count == 0:
         print("🚨 Missing domains or labels in the database!")
-        exit(1)
+        os._exit(1)
 
     # Get metrics for each domain without exception
     # Use the latest metrics table as a subquery to get the domain IDs
@@ -584,7 +581,7 @@ if __name__ == '__main__':
     # Check arguments
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
-        exit(1)
+        os._exit(1)
 
     # Parse arguments
     command = sys.argv[1]
@@ -600,4 +597,4 @@ if __name__ == '__main__':
         purge()
     else:
         print(f"Unknown command: {command}")
-        exit(1)
+        os._exit(1)
