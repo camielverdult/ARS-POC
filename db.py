@@ -570,12 +570,26 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     # ]
 
 
-    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')]) for row in rows]
-
     cur.close()
     conn.close()
 
-    return rows
+    # Convert the concatenated topic_id string to a list of integers
+    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')]) for row in rows]
+
+    # Get the total number of topics
+    topics = get_topics()
+    topic_count = len(topics)
+
+    # Initialize a binary label vector for each row
+    binary_labelled_rows = []
+    for screenshot, topic_ids in rows:
+        binary_label = [0] * topic_count  # Initialize a binary label vector with all zeros
+        for topic_id in topic_ids:
+            if topic_id <= topic_count:  # Ensure the topic_id is within the range of topics
+                binary_label[topic_id - 1] = 1  # Set to 1 at the index corresponding to the topic_id
+        binary_labelled_rows.append((screenshot, binary_label))
+
+    return binary_labelled_rows
 
 if __name__ == '__main__':
     # Check arguments

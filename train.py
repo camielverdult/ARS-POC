@@ -13,15 +13,10 @@ import db
 
 INPUT_SIZE = 256
 
-def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE), use_multiple_labels: bool = False) -> (np.ndarray, np.ndarray):
-    '''Loads and preprocesses images'''
+def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE)) -> (np.ndarray, np.ndarray):
+    '''Loads and preprocesses images and labels for multi-label classification.'''
     training_images = db.get_training_data(limit)
-    # training_images = [
-    #     ('screenshots/1.png', [1,2,3]),
-    #     ('screenshots/2.png', [4,5,6]),
-    #     ('screenshots/3.png', [7,8,9])
-    # ]
-
+    
     images = []
     labels = []
 
@@ -35,20 +30,14 @@ def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE), use
             # Convert the image to a numpy array
             images.append(np.array(resized_image))
 
-        # Add the label to the array
-        if use_multiple_labels:
-            labels.append(domain_labels)
-        else:
-            labels.append(domain_labels[0])
+        # Add the label to the array (as a binary vector for multi-label classification)
+        labels.append(domain_labels)  # 'domain_labels' should already be a binary vector
 
-    if use_multiple_labels:
-        # Pad the labels so they are all the same length
-        labels = pad_sequences(labels, padding='post')
-    else:
-        # Convert the labels to a numpy array
-        labels = np.array(labels)
+    # Convert lists to numpy arrays
+    images = np.array(images)
+    labels = np.array(labels)
 
-    return (np.array(images), labels)
+    return images, labels
 
 def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
     '''Creates a convolutional neural network model'''
@@ -95,7 +84,7 @@ def train():
     print("📷 Preparing images and labels...")
 
     # Load the images and labels for the 100 most popular screenshotted domains
-    images, labels = load_training_data(100)
+    images, labels = load_training_data(limit=100)
 
     # Split the data into training and testing sets
     print("📊 Preparing test and training datasets...")
