@@ -164,3 +164,4 @@ screenshot*/*
 db-backups/*
 .DS_Store
 */.DS_Store
+research_data/models

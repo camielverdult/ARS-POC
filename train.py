@@ -7,7 +7,9 @@ from sklearn.model_selection import train_test_split
 
 from tensorflow.keras import layers, models
 from tensorflow.keras.utils import plot_model
+
 import sys
+import datetime
 
 import db
 
@@ -84,7 +86,7 @@ def train():
     print("📷 Preparing images and labels...")
 
     # Load the images and labels for the 100 most popular screenshotted domains
-    images, labels = load_training_data(limit=100)
+    images, labels = load_training_data()
 
     # Split the data into training and testing sets
     print("📊 Preparing test and training datasets...")
@@ -97,6 +99,17 @@ def train():
     # Train the model
     print("🦾 Training model...")
     model.fit(images_train, labels_train, epochs=10, validation_data=(images_test, labels_test))
+
+    # Save the model with timestamp
+    print("💾 Saving model...")
+
+    timestamp = datetime.datetime.now().strftime("%H%M%S-%d%m%Y")
+    model_name = f"model-{timestamp}"
+    model.save(f"research_data/models/{model_name}.keras")
+
+    # Evaluate the model
+    print("🧾 Evaluating model...")
+    test_loss, test_acc = model.evaluate(images_test, labels_test, verbose=2)
 
 if __name__ == "__main__":
     # Check args for 'plot' to plot the model
