@@ -515,12 +515,20 @@ def get_unprocessed_domains() -> (list[int], str):
 
     return (unprocessed_domain_ids, description)
 
-def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
-    """Returns the id, screenshot path and labels/topics for all labeled domains"""
+def get_succesful_domain_ids() -> list[int]:
+    """Returns the succesful domains from the latest screenshot session"""
     conn = get_conn()
     cur = conn.cursor()
 
-    # There might be multiple topics per domain, so we need to group them into a list
+    # Verify tables that we join in the query are not empty
+    domains_count = get_count('domains', cur)
+
+    if domains_count == 0:
+        print("🚨 Missing domains or labels in the database!")
+        os._exit(1)
+
+    # Get metrics for each domain without exception
+    # Use the latest metrics table as a subquery to get the domain IDs
     # We also need to ignore domains that:
     # - have been marked as ignored
     # - have not been processed yet
@@ -528,20 +536,9 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     # There may be multiple metrics per domain, so we need to find the latest metric per domain
     # We want to collect multiple topics per domain, so we need to group them into a list
 
-    # Verify tables that we join in the query are not empty
-    domains_count = get_count('domains', cur)
-    labels_count = get_count('labels', cur)
-
-    if domains_count == 0 or labels_count == 0:
-        print("🚨 Missing domains or labels in the database!")
-        os._exit(1)
-
-    # Get metrics for each domain without exception
-    # Use the latest metrics table as a subquery to get the domain IDs
     sql_query = '''
-        SELECT d.screenshot, GROUP_CONCAT(l.topic_id)
+        SELECT DISTINCT d.domain_id
         FROM domains d
-        INNER JOIN labels AS l ON d.domain_id = l.domain_id
         INNER JOIN metrics AS m ON d.domain_id = m.domain_id
         INNER JOIN (
             SELECT domain_id, MAX(start_time) AS latest_start_time
@@ -550,6 +547,68 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
         ) subq ON d.domain_id = subq.domain_id AND m.start_time = subq.latest_start_time
         WHERE d.ignored IS FALSE
             AND m.exception IS NULL
+        ORDER BY d.ranking DESC
+    '''
+
+    cur.execute(sql_query)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return [row[0] for row in rows]
+
+def get_succesful_domain_urls() -> list[str]:
+    domain_ids = get_succesful_domain_ids()
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get URLs from domain IDs
+    sql_query = f'''
+        SELECT domain
+        FROM domains
+        WHERE domain_id IN ({','.join(map(str, domain_ids))})
+    '''
+
+    cur.execute(sql_query)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return rows
+
+def get_labels() -> list:
+    # There might be multiple topics per domain, so we need to group them into a list
+    pass
+
+def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
+    """Returns the id, screenshot path and labels/topics for all labeled domains"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    successful_domain_ids = get_succesful_domain_ids()
+    if not successful_domain_ids:
+        print("🚨 No successful domains found in the database!")
+        return []
+
+    labels_count = get_count('labels', cur)
+    if labels_count == 0:
+        print("🚨 Missing labels in the database!")
+        os._exit(1)
+
+    # Format the domain IDs for SQL query
+    domain_ids_str = ','.join(map(str, successful_domain_ids))
+
+    # Updated SQL query
+    sql_query = f'''
+        SELECT d.screenshot, GROUP_CONCAT(l.topic_id)
+        FROM domains d
+        INNER JOIN labels AS l ON d.domain_id = l.domain_id
+        WHERE d.domain_id IN ({domain_ids_str})
         GROUP BY d.domain_id
         ORDER BY d.ranking DESC
     '''
@@ -568,7 +627,6 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     #     ('screenshots/2.png', '4,5,6'),
     #     ('screenshots/3.png', '7,8,9')
     # ]
-
 
     cur.close()
     conn.close()
