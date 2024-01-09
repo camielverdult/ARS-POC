@@ -57,6 +57,7 @@ def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
         neurons as there are classes, and you should use a softmax activation 
         function.
     '''
+    # TODO: Is this model appropiate for multi-label classification of screenshots?
     model = models.Sequential([
         layers.Conv2D(32, (3, 3), activation='relu', input_shape=(input_size, input_size, 3)),
         layers.MaxPooling2D((2, 2)),

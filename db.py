@@ -580,7 +580,11 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     topics = get_topics()
     topic_count = len(topics)
 
-    # Initialize a binary label vector for each row
+    # Initialize a binary label vector for each row, that would look like this for 12 labels:
+    # [ 
+    #    ('screenshots/1.png', [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]),
+    #    ('screenshots/2.png', [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1])
+    # ]
     binary_labelled_rows = []
     for screenshot, topic_ids in rows:
         binary_label = [0] * topic_count  # Initialize a binary label vector with all zeros
