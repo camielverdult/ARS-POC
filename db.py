@@ -3,12 +3,17 @@ import shutil
 import sqlite3
 import sys
 import time
+import random
+
+import numpy as np
+import pandas as pd
+from PIL import Image
 import yaml
 
-import pandas as pd
-
 DB_FILENAME = 'screenshots.sqlite3'
-DOMAIN_AMOUNT = 16
+DOMAIN_AMOUNT = 10
+VALIDATION_AMOUNT = 0.2
+INPUT_SIZE = 256
 
 # These domains triggered MalwareBytes and contain Riskware, Trojans, Malvertising, are compromised, etc.
 # AKA bad stuff that we don't want to visit
@@ -184,7 +189,8 @@ def init_db(filename: str = None):
             ranking INTEGER,
             domain TEXT,
             screenshot TEXT,
-            ignored BOOLEAN DEFAULT FALSE
+            ignored BOOLEAN DEFAULT FALSE,
+            used_in_training BOOLEAN DEFAULT TRUE
         )
     ''')
 
@@ -207,7 +213,8 @@ def init_db(filename: str = None):
     # Create labels table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS labels
-        (domain_id INTEGER, topic_id INTEGER,
+        (domain_id INTEGER,
+         topic_id INTEGER,
          FOREIGN KEY(domain_id) REFERENCES domains(domain_id),
          FOREIGN KEY(topic_id) REFERENCES topics(id))
     ''')
@@ -559,6 +566,45 @@ def get_succesful_domain_ids() -> list[int]:
 
     return [row[0] for row in rows]
 
+def randomise_use_in_training(amount_to_randomise: int = VALIDATION_AMOUNT):
+    """Checks if the succesful domains->used_in_training values have been divided into train and validate data and if not, sets them proportionally randomly."""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Check if the domains table is empty
+    domains_count = get_count('domains', cur)
+
+    if domains_count == 0:
+        print("🚨 Missing domains in the database!")
+        os._exit(1)
+
+    # Calculate the amount of domains that should be updated
+    domains_to_update_amount = int(DOMAIN_AMOUNT * amount_to_randomise)
+
+    # Check if the current amount of domains used in training is correct
+    domains_used_in_training_count = get_count('domains', cur, select='*', where='used_in_training IS TRUE')
+
+    # The current amount of domains used in training is already set, we're done here
+    if domains_used_in_training_count == amount_to_randomise:
+        print(f"✅ Correct amount of domains used in training already set to {amount_to_randomise*100:.0f}%!")
+        return
+
+    # Set VALIDATION_AMOUNT% of domains to have used_in_training = FALSE
+    human_domains = get_succesful_domain_ids()
+    ids_to_exclude = random.sample(human_domains, domains_to_update_amount)
+
+    # Update the domains to be used in training
+    print(f"📊 Randomly updating {domains_to_update_amount*100:.0f}% of domains to be used in training...")
+    sql = "UPDATE domains SET used_in_training = FALSE WHERE domain_id IN ("
+    for id_to_exclude in ids_to_exclude:
+        sql += f"{id_to_exclude},"
+    sql = sql[:-1] + ")"
+
+    cur.execute(sql)
+
+    # Commit the changes to the database
+    conn.commit()
+
 def get_succesful_domain_urls() -> list[str]:
     domain_ids = get_succesful_domain_ids()
 
@@ -579,21 +625,40 @@ def get_succesful_domain_urls() -> list[str]:
     cur.close()
     conn.close()
 
-    return rows
+    return [row[0] for row in rows]
+
+def update_domain_label(domain: str, label: str):
+    """Updates the label for a domain"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Update/insert the label for the domain
+    sql_query = f'''
+        UPSERT domains
+        SET label = '{label}'
+        WHERE domain = '{domain}'
+    '''
+
+    cur.execute(sql_query)
+    conn.commit()
+
+    cur.close()
+    conn.close()
 
 def get_labels() -> list:
     # There might be multiple topics per domain, so we need to group them into a list
     pass
 
-def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
-    """Returns the id, screenshot path and labels/topics for all labeled domains"""
+def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+    """
+        Returns the screenshot image data and labels/topics for all labeled domains. Only succesful domains are used in training/validation. The labels are returned as a binary vector.
+        @param limit: The amount of domains to return
+        @return: (training_images, training_labels, validation_images, validation_labels)
+    """
     conn = get_conn()
     cur = conn.cursor()
 
     successful_domain_ids = get_succesful_domain_ids()
-    if not successful_domain_ids:
-        print("🚨 No successful domains found in the database!")
-        return []
 
     labels_count = get_count('labels', cur)
     if labels_count == 0:
@@ -603,9 +668,8 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     # Format the domain IDs for SQL query
     domain_ids_str = ','.join(map(str, successful_domain_ids))
 
-    # Updated SQL query
     sql_query = f'''
-        SELECT d.screenshot, GROUP_CONCAT(l.topic_id)
+        SELECT d.screenshot, GROUP_CONCAT(l.topic_id), d.used_in_training
         FROM domains d
         INNER JOIN labels AS l ON d.domain_id = l.domain_id
         WHERE d.domain_id IN ({domain_ids_str})
@@ -622,36 +686,59 @@ def get_training_data(limit: int = None) -> list: # list[(str, list[int])]
     rows = cur.fetchall()
     
     # rows now looks like this:
+    #      path, topic_ids, used_in_training
     # [
-    #     ('screenshots/1.png', '1,2,3'),
-    #     ('screenshots/2.png', '4,5,6'),
-    #     ('screenshots/3.png', '7,8,9')
+    #     ('screenshots/1.png', '1,2,3', 1),
+    #     ('screenshots/2.png', '4,5,6', 1),
+    #     ('screenshots/3.png', '7,8,9', 0)
     # ]
 
     cur.close()
     conn.close()
 
     # Convert the concatenated topic_id string to a list of integers
-    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')]) for row in rows]
+    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')], bool(row[2])) for row in rows]
 
     # Get the total number of topics
-    topics = get_topics()
-    topic_count = len(topics)
+    topic_count = get_count('topics')
+
+    # These are the training and validation data
+    training_images = []
+    training_labels = []
+    validation_images = []
+    validation_labels = []
 
     # Initialize a binary label vector for each row, that would look like this for 12 labels:
     # [ 
     #    ('screenshots/1.png', [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]),
     #    ('screenshots/2.png', [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1])
     # ]
-    binary_labelled_rows = []
-    for screenshot, topic_ids in rows:
+    # Also sort the data into training and validation data
+    for screenshot_path, topic_ids, used_in_training in rows:
+        # Load the image
+        with Image.open(screenshot_path, 'r') as image:
+            rgb_image = image.convert('RGB')
+            resized_image = rgb_image.resize((INPUT_SIZE, INPUT_SIZE))
+            image_data = np.array(resized_image)
+
         binary_label = [0] * topic_count  # Initialize a binary label vector with all zeros
         for topic_id in topic_ids:
             if topic_id <= topic_count:  # Ensure the topic_id is within the range of topics
                 binary_label[topic_id - 1] = 1  # Set to 1 at the index corresponding to the topic_id
-        binary_labelled_rows.append((screenshot, binary_label))
 
-    return binary_labelled_rows
+        match used_in_training:
+            case True:
+                training_images.append(image_data)
+                training_labels.append(binary_label)
+            case False:
+                validation_images.append(image_data)
+                validation_labels.append(binary_label)
+            case _:
+                # This should never happen
+                raise Exception("Used in training is not a boolean!")
+            
+    # Convert lists to numpy arrays
+    return (np.array(training_images), np.array(training_labels), np.array(validation_images), np.array(validation_labels))
 
 if __name__ == '__main__':
     # Check arguments

@@ -13,57 +13,27 @@ import datetime
 
 import db
 
-INPUT_SIZE = 256
-
-def load_training_data(limit: int = None, img_size=(INPUT_SIZE, INPUT_SIZE)) -> (np.ndarray, np.ndarray):
-    '''Loads and preprocesses images and labels for multi-label classification.'''
-    training_images = db.get_training_data(limit)
-    
-    images = []
-    labels = []
-
-    # Replace the path in each image with the actual image data
-    for screenshot_path, domain_labels in training_images:
-        # Load and resize the image
-        with Image.open(screenshot_path, 'r') as image:
-            rgb_image = image.convert('RGB')
-            resized_image = rgb_image.resize(img_size)
-
-            # Convert the image to a numpy array
-            images.append(np.array(resized_image))
-
-        # Add the label to the array (as a binary vector for multi-label classification)
-        labels.append(domain_labels)  # 'domain_labels' should already be a binary vector
-
-    # Convert lists to numpy arrays
-    images = np.array(images)
-    labels = np.array(labels)
-
-    return images, labels
+INPUT_SIZE = db.INPUT_SIZE
 
 def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
     '''Creates a convolutional neural network model'''
     # Define a simple CNN model
-    topic_mapping_count = len(db.get_topics())
+    # topic_mapping_count = len(db.get_topics())
+    topic_mapping_count = db.get_count('topics')
 
     if topic_mapping_count == 0:
         raise Exception("No topic mappings found in the database")
 
-    '''
-        If you have a binary classification problem(i.e., your labels are 
-        either 0 or 1), you should ensure that the last layer of your model has
-        only one neuron and uses a sigmoid activation function. If you have a 
-        multi-class classification problem, the last layer should have as many 
-        neurons as there are classes, and you should use a softmax activation 
-        function.
-    '''
-    # TODO: Is this model appropiate for multi-label classification of screenshots?
+    
+    # We have a multi-class classification problem, the last layer should have
+    # as many  neurons as there are classes, and you should use a softmax 
+    # activation function. The loss function should be categorical_crossentropy.
     model = models.Sequential([
         layers.Conv2D(32, (3, 3), activation='relu', input_shape=(input_size, input_size, 3)),
         layers.MaxPooling2D((2, 2)),
         layers.Conv2D(64, (3, 3), activation='relu'),
         layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(input_size, (3, 3), activation='relu'),
+        layers.Conv2D(128, (3, 3), activation='relu'),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
         layers.Dense(topic_mapping_count, activation='sigmoid')  # Adjust the output layer based on the number of topics
@@ -71,8 +41,7 @@ def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
 
     # Compile the model
     model.compile(optimizer='adam',
-                # loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                loss='binary_crossentropy',
+                loss='categorical_crossentropy',
                 metrics=['accuracy'])
 
     return model
@@ -83,15 +52,14 @@ def make_model_diagram(model: models.Sequential):
 
 def train():
     '''Loads data and trains the model'''
+    db.randomise_use_in_training()
+
     # Load and preprocess images and labels
     print("📷 Preparing images and labels...")
 
-    # Load the images and labels for the 100 most popular screenshotted domains
-    images, labels = load_training_data()
-
     # Split the data into training and testing sets
     print("📊 Preparing test and training datasets...")
-    images_train, images_test, labels_train, labels_test = train_test_split(images, labels, test_size=0.2, random_state=42)
+    training_images, training_labels, validation_images, validation_labels = db.get_training_data()
 
     # Define a simple CNN model
     print("🦾 Building model...")
@@ -99,7 +67,7 @@ def train():
 
     # Train the model
     print("🦾 Training model...")
-    model.fit(images_train, labels_train, epochs=10, validation_data=(images_test, labels_test))
+    model.fit(training_images, training_labels, epochs=10, validation_data=(validation_images, validation_labels))
 
     # Save the model with timestamp
     print("💾 Saving model...")
@@ -108,9 +76,9 @@ def train():
     model_name = f"model-{timestamp}"
     model.save(f"research_data/models/{model_name}.keras")
 
-    # Evaluate the model
-    print("🧾 Evaluating model...")
-    test_loss, test_acc = model.evaluate(images_test, labels_test, verbose=2)
+    # # Evaluate the model
+    # print("🧾 Evaluating model...")
+    # test_loss, test_acc = model.evaluate(images_test, labels_test, verbose=2)
 
 if __name__ == "__main__":
     # Check args for 'plot' to plot the model
