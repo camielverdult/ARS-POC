@@ -1,5 +1,6 @@
 pandas # CSV
 selenium # Browser automation
+tensorflow # Machine learning
 
 Pillow # Image processing
 numpy # Numerical Python
