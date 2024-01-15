@@ -1,6 +1,6 @@
 su -c "apt-get update && \
         apt-get upgrade -y && \
-        apt-get install git python3-pip wget xvfb firefox-esr graphviz && \
+        apt-get install git python3-pip wget xvfb firefox-esr graphviz -y && \
         pip3 install PyVirtualDisplay tensorflow --break-system-packages && \
         wget https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz && \
         tar -x geckodriver -zf geckodriver-v0.34.0-linux64.tar.gz && \
