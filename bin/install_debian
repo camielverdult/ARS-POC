@@ -1,16 +1,10 @@
-su -c "apt-get update"
-su -c "apt-get upgrade -y"
-
-# Install git, pip and other packages for the project
-su -c "apt-get install git python3-pip wget xvfb firefox-esr graphviz"
-
-# Install python packages
-su -c "pip3 install PyVirtualDisplay tensorflow --break-system-packages"
-
-# Download and install geckodriver
-su -c "wget https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz"
-su -c "tar -x geckodriver -zf geckodriver-v0.34.0-linux64.tar.gz"
-su -c "mv geckodriver /usr/bin/geckodriver"
+su -c "apt-get update && \
+        apt-get upgrade -y && \
+        apt-get install git python3-pip wget xvfb firefox-esr graphviz && \
+        pip3 install PyVirtualDisplay tensorflow --break-system-packages && \
+        wget https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz && \
+        tar -x geckodriver -zf geckodriver-v0.34.0-linux64.tar.gz && \
+        mv geckodriver /usr/bin/geckodriver"
 
 # Create SSH key
 ssh-keygen -t ed25519 -C "ARS-POC" -N '' -f ~/.ssh/id_ed25519
