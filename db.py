@@ -757,8 +757,6 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
     return (np.array(training_images), np.array(training_labels), np.array(validation_images), np.array(validation_labels))
 
 if __name__ == '__main__':
-    seed()
-    exit(0)
     # Check arguments
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")

@@ -192,7 +192,7 @@ def screenshot_domains():
     if not os.path.exists(db.DB_FILENAME):
         db.seed()
     else:
-        db.init_db()
+        print("🌱 DB exists (assuming seeded)...")
 
     # Create session with given hardware info
     session_id = db.start_session(device_info=platform.platform())
