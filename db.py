@@ -8,10 +8,10 @@ import random
 import numpy as np
 import pandas as pd
 from PIL import Image
-import yaml
+import pathlib
 
 DB_FILENAME = 'screenshots.sqlite3'
-DOMAIN_AMOUNT = 10
+DOMAIN_AMOUNT = 110000
 VALIDATION_AMOUNT = 0.2
 INPUT_SIZE = 256
 
@@ -187,7 +187,7 @@ def init_db(filename: str = None):
         CREATE TABLE IF NOT EXISTS domains (
             domain_id INTEGER PRIMARY KEY,
             ranking INTEGER,
-            domain TEXT,
+            domain TEXT UNIQUE,
             screenshot TEXT,
             ignored BOOLEAN DEFAULT FALSE,
             used_in_training BOOLEAN DEFAULT TRUE
@@ -207,7 +207,7 @@ def init_db(filename: str = None):
     # Create topics table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS topics
-        (topic_id INTEGER PRIMARY KEY, name TEXT)
+        (topic_id INTEGER PRIMARY KEY, name TEXT UNIQUE)
     ''')
 
     # Create labels table
@@ -333,75 +333,70 @@ def seed_domains():
     cur.close()
     conn.close()
 
-def seed_topics():
-    # Connect to the database
-    conn = get_conn()
-    cur = conn.cursor()
-
-    # Build SQL statement to bulk-insert topics into the database
-    print("📝 Inserting topics into the database...")
-
-    # Read the topics from the topics.yml file and convert to SQL statement
-    with open('topics.yml', 'r') as file:
-        lines = file.readlines()
-        for line in lines:
-            topic, topic_id = line.strip().split(':')
-            topic = topic.strip()
-            topic_id = topic_id.strip()
-            sql = f"INSERT INTO topics (topic_id, name) VALUES ({topic_id}, '{topic}')"
-            try:
-                cur.execute(sql)
-            except sqlite3.Error as e:
-                print(f"Error inserting topics: {e}")
-                os._exit(1)
-
-    # Commit the changes to the database
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
 def seed_labels():
-    # Connect to the database
+
+    domain_ranking_directory = pathlib.Path("top_websites_by_country")
+    files = [x for x in domain_ranking_directory.glob("*.csv")]
+
+    df_list = []
+    for file in files:
+        df = pd.read_csv(file, delimiter=',', on_bad_lines='warn')
+        df_list.append(df)
+
+    merged_df = pd.concat(df_list)
+
+    # Remove entries that have an empty categories column
+    merged_df = merged_df.dropna(subset=['categories'])
+
+    # Removing duplicates on the domain entry in the dataframe
+    distinct_df = merged_df.drop_duplicates(subset=['domain'])
+
+    # Remove CDN domains
+    distinct_df = distinct_df[~distinct_df['domain'].str.contains("cdn", na=False)]
+
+    # Remove entries that have an inappropriate category
+    distinct_df = distinct_df[~distinct_df['categories'].str.contains("Porn", na=False)]
+
+    # Convert string of categories seperated by ; into list of category strings
+    distinct_df['categories'] = distinct_df['categories'].str.split(';')
+
+    # Converting the distinct DataFrame to a list of dictionaries
+    distinct_domains = distinct_df.to_dict(orient='records')
+
+    # Get all categories from the distinct domains
+    categories = []
+    for domain in distinct_domains:
+        categories.extend(domain['categories'])
+
+    # Remove duplicates from the categories list
+    distinct_categories = list(set(categories))
+
     conn = get_conn()
     cur = conn.cursor()
 
-    # Check if topics and domains tables are empty
-    topics_count = get_count('topics', cur)
-    domains_count = get_count('domains', cur)
+    # Insert the categories into the topics table
+    for category_id, category in enumerate(distinct_categories):
+        cur.execute("INSERT OR IGNORE INTO topics (topic_id, name) VALUES (?, ?)", (category_id, category))
 
-    if topics_count == 0 or domains_count == 0:
-        print("🚨 Missing topics or domains in the database!")
-        os._exit(1)
+    # Prepare distinct_domains for insertion into the labels table by replacing the categories with their index
+    for domain in distinct_domains:
+        domain['categories'] = [distinct_categories.index(category) for category in domain['categories']]
 
-    # Build SQL statement to bulk-insert labels into the database
-    print("📝 Inserting labels into the database...")
+    # Insert the labels into the labels table
+    for domain in distinct_domains:
+        domain_url = domain['domain']
+        category_ids = domain['categories']
+        domain_id = get_domain_id(domain_url, cur)
+        for category_id in category_ids:
+            cur.execute("INSERT INTO labels (domain_id, topic_id) VALUES (?, ?)", (domain_id, category_id))
 
-    # Read the labels from the labels.yml file and convert to SQL statement
-    # The labels.yml file entry is structured like this:
-    # mozilla.org: [2, 6]
-    yaml_file = open('labels.yml')
-    yaml_data = yaml.safe_load(yaml_file)
-    for domain, topic_ids in yaml_data.items():
-        for topic_id in topic_ids:
-            # Insert each entry in the topics list as a label for the domain
-            sql = f"INSERT INTO labels (domain_id, topic_id) VALUES ((SELECT domain_id FROM domains WHERE domain = '{domain}'), {topic_id})"
-            try:
-                cur.execute(sql)
-            except sqlite3.Error as e:
-                print(f"Error inserting labels: {e}")
-                os._exit(1)
-
-    # Commit the changes to the database
     conn.commit()
-
     cur.close()
     conn.close()
 
 def seed():
     init_db()
     seed_domains()
-    seed_topics()
     seed_labels()
 
 def backup():
@@ -461,6 +456,27 @@ def purge():
         
         print("🗑️ Purging screenshots directory...")
         shutil.rmtree('screenshots')
+
+def get_domain_id(domain, open_cur: sqlite3.Cursor = None) -> int:
+    if not open_cur:
+        conn = get_conn()
+        cur = conn.cursor()
+    else:    
+        cur = open_cur
+
+    # Get the domain ID
+    cur.execute(f"SELECT domain_id FROM domains WHERE domain = '{domain}'")
+    domain_id = cur.fetchone()
+
+    if not domain_id:
+        print(f"🚨 Error getting domain ID for {domain}!")
+        os._exit(1)
+
+    if not open_cur:
+        cur.close()
+        conn.close()
+
+    return domain_id[0]
 
 def get_topics() -> list:
     """Returns a list of topics from the database"""
@@ -741,6 +757,8 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
     return (np.array(training_images), np.array(training_labels), np.array(validation_images), np.array(validation_labels))
 
 if __name__ == '__main__':
+    seed()
+    exit(0)
     # Check arguments
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
