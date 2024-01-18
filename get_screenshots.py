@@ -201,7 +201,7 @@ def screenshot_domains():
     start_time = time.time()
 
     # Fetch domain IDs that are not ignored
-    domain_ids, description = db.get_unprocessed_domains()
+    domain_ids, description = db.get_unprocessed_domains(with_labels=True)
 
     if not domain_ids: # <=> len(domain_ids) == 0
         print("🎉 All domains have already been processed!")
@@ -213,7 +213,7 @@ def screenshot_domains():
 
     # Define the number of processes and chunk size for multiprocessing, based on the number of cores in the system
     # The number of processes will not exceed over 16 due to memory constraints
-    num_processes = calc_process_count() # TODO: find upper limit of num_processes
+    num_processes = calc_process_count()
     chunk_size = len(domain_ids) // num_processes + (len(domain_ids) % num_processes > 0)
 
     # Use multiprocessing to take screenshots

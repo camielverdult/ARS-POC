@@ -494,7 +494,74 @@ def get_topics() -> list:
 
     return topics
 
-def get_unprocessed_domains() -> (list[int], str):
+def get_labels(open_cur: sqlite3.Cursor = None) -> list:
+    """Returns the domain_id with its corresponding labels from the database"""
+    if not open_cur:
+        conn = get_conn()
+        cur = conn.cursor()
+
+    # There might be multiple topics per domain, so we need to group them into a list
+    sql_query = f'''
+        SELECT domain_id, GROUP_CONCAT(topic_id)
+        FROM labels
+        GROUP BY domain_id
+    '''
+
+    cur.execute(sql_query)
+
+    rows = cur.fetchall()
+    
+    # rows now looks like this:
+    # domain_id, topic_ids
+    # [
+    #     (0, '1,2,3'),
+    #     (1, '4,5,6'),
+    #     (2, '7,8,9')
+    # ]
+
+    if not open_cur:
+        cur.close()
+        conn.close()
+
+    # Convert the concatenated topic_id string to a list of integers
+    rows = [(row[0], [int(topic_id) for topic_id in row[1].split(',')]) for row in rows]
+
+    return rows
+
+def get_labeled_domains() -> list:
+    """Returns a list of domain IDs that have been labeled"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get all domain IDs that have been labeled
+    cur.execute('SELECT DISTINCT labels.domain_id FROM labels INNER JOIN domains ON labels.domain_id = domains.domain_id')
+
+    # Convert the domain IDs to a list
+    labeled_domains = [row[0] for row in cur.fetchall()]
+
+    # Find domains that do not have metrics from the latest session
+    # These domains have not been processed yet
+    # Use metrics_sessions table to find the latest session
+    cur.execute(f'''
+        SELECT DISTINCT d.domain_id
+        FROM domains d
+        LEFT JOIN metrics m ON d.domain_id = m.domain_id
+        LEFT JOIN metrics_sessions ms ON m.metric_id = ms.metric_id
+        WHERE ms.session_id = {get_latest_session_id(cur)}
+    ''')
+
+    # Convert the domain IDs to a list
+    processed_domain_ids = [row[0] for row in cur.fetchall()]
+
+    # Get the difference between the two lists
+    unlabeled_domain_ids = list(set(labeled_domains) - set(processed_domain_ids))
+
+    cur.close()
+    conn.close()
+
+    return unlabeled_domain_ids
+
+def get_unprocessed_domains(with_labels = False) -> (list[int], str):
     """Returns a list of domain IDs that have not been processed yet and are not ignored or have had an exception."""
 
     # Connect to the database
@@ -509,12 +576,16 @@ def get_unprocessed_domains() -> (list[int], str):
     domains_count = get_count('domains', cur)
 
     description = ""
+    labeled_domains = get_labels(cur)
+    what_is_this_value = ','.join(map(str, [domain_id for domain_id, _ in labeled_domains]))
 
     # If the metrics table is empty, we need to process all domains
     if metrics_count == 0 or metrics_count < domains_count:
         # Get all domain IDs that are not ignored and not in the BAD_DOMAINS list
+        # Only find domains with a label
         sql_query = f"""
             SELECT domain_id FROM domains
+            WHERE domain_id IN ({what_is_this_value})
         """
         description = "all"
     else:
@@ -660,10 +731,6 @@ def update_domain_label(domain: str, label: str):
 
     cur.close()
     conn.close()
-
-def get_labels() -> list:
-    # There might be multiple topics per domain, so we need to group them into a list
-    pass
 
 def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
