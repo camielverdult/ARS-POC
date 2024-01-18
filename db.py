@@ -133,10 +133,10 @@ def get_session_metrics(session_id: int) -> dict:
     query = f"""
         SELECT 
             COUNT(DISTINCT CASE WHEN d.screenshot IS NOT NULL THEN m.metric_id END) AS num_pictures,
-            SUM(CASE WHEN m.exception IS NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS virtual_time,
+            SUM(CASE WHEN m.exception IS NULL THEN m.end_time - m.start_time END) AS virtual_time,
             COUNT(CASE WHEN m.exception IS NOT NULL THEN m.metric_id END) AS skipped_domains,
-            AVG(CASE WHEN m.exception IS NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS avg_duration,
-            SUM(CASE WHEN m.exception IS NOT NULL THEN strftime('%s', m.end_time) - strftime('%s', m.start_time) END) AS time_lost
+            AVG(CASE WHEN m.exception IS NULL THEN m.end_time - m.start_time END) AS avg_duration,
+            SUM(CASE WHEN m.exception IS NOT NULL THEN m.end_time - m.start_time END) AS time_lost
         FROM metrics m
         INNER JOIN metrics_sessions ms ON m.metric_id = ms.metric_id
         INNER JOIN domains d ON m.domain_id = d.domain_id
@@ -190,7 +190,7 @@ def init_db(filename: str = None):
             domain TEXT UNIQUE,
             screenshot TEXT,
             ignored BOOLEAN DEFAULT FALSE,
-            used_in_training BOOLEAN DEFAULT TRUE
+            used_in_training BOOLEAN DEFAULT FALSE
         )
     ''')
 
@@ -499,6 +499,8 @@ def get_labels(open_cur: sqlite3.Cursor = None) -> list:
     if not open_cur:
         conn = get_conn()
         cur = conn.cursor()
+    else:
+        cur = open_cur
 
     # There might be multiple topics per domain, so we need to group them into a list
     sql_query = f'''
@@ -577,7 +579,7 @@ def get_unprocessed_domains(with_labels = False) -> (list[int], str):
 
     description = ""
     labeled_domains = get_labels(cur)
-    what_is_this_value = ','.join(map(str, [domain_id for domain_id, _ in labeled_domains]))
+    labeled_domains = ','.join(map(str, [domain_id for domain_id, _ in labeled_domains]))
 
     # If the metrics table is empty, we need to process all domains
     if metrics_count == 0 or metrics_count < domains_count:
@@ -585,7 +587,7 @@ def get_unprocessed_domains(with_labels = False) -> (list[int], str):
         # Only find domains with a label
         sql_query = f"""
             SELECT domain_id FROM domains
-            WHERE domain_id IN ({what_is_this_value})
+            WHERE domain_id IN ({labeled_domains})
         """
         description = "all"
     else:
@@ -594,7 +596,7 @@ def get_unprocessed_domains(with_labels = False) -> (list[int], str):
             SELECT DISTINCT d.domain_id 
             FROM domains d
             LEFT JOIN metrics m ON d.domain_id = m.domain_id
-            WHERE (m.start_time IS NULL OR m.start_time < datetime('now', '-1 day'))
+            WHERE (m.start_time IS NULL OR m.start_time < datetime('now', '-1 day')) AND domain_id IN ({labeled_domains})
             AND (d.ignored IS FALSE)
             AND (m.exception IS NULL)
         """
@@ -621,27 +623,15 @@ def get_succesful_domain_ids() -> list[int]:
         print("🚨 Missing domains or labels in the database!")
         os._exit(1)
 
-    # Get metrics for each domain without exception
-    # Use the latest metrics table as a subquery to get the domain IDs
-    # We also need to ignore domains that:
-    # - have been marked as ignored
-    # - have not been processed yet
-    # - have had an exception
-    # There may be multiple metrics per domain, so we need to find the latest metric per domain
-    # We want to collect multiple topics per domain, so we need to group them into a list
-
+    # Get metrics for each domain without exception from last session
     sql_query = '''
         SELECT DISTINCT d.domain_id
         FROM domains d
         INNER JOIN metrics AS m ON d.domain_id = m.domain_id
-        INNER JOIN (
-            SELECT domain_id, MAX(start_time) AS latest_start_time
-            FROM metrics
-            GROUP BY domain_id
-        ) subq ON d.domain_id = subq.domain_id AND m.start_time = subq.latest_start_time
-        WHERE d.ignored IS FALSE
+        INNER JOIN metrics_sessions AS ms ON m.metric_id = ms.metric_id
+        WHERE ms.session_id = (SELECT MAX(session_id) FROM sessions)
             AND m.exception IS NULL
-        ORDER BY d.ranking DESC
+        ORDER BY d.ranking ASC
     '''
 
     cur.execute(sql_query)
@@ -653,7 +643,7 @@ def get_succesful_domain_ids() -> list[int]:
 
     return [row[0] for row in rows]
 
-def randomise_use_in_training(amount_to_randomise: int = VALIDATION_AMOUNT):
+def randomise_use_in_training(training_data_amount: float = float(1 - VALIDATION_AMOUNT)):
     """Checks if the succesful domains->used_in_training values have been divided into train and validate data and if not, sets them proportionally randomly."""
     conn = get_conn()
     cur = conn.cursor()
@@ -665,25 +655,25 @@ def randomise_use_in_training(amount_to_randomise: int = VALIDATION_AMOUNT):
         print("🚨 Missing domains in the database!")
         os._exit(1)
 
-    # Calculate the amount of domains that should be updated
-    domains_to_update_amount = int(DOMAIN_AMOUNT * amount_to_randomise)
-
     # Check if the current amount of domains used in training is correct
     domains_used_in_training_count = get_count('domains', cur, select='*', where='used_in_training IS TRUE')
 
+    # Calculate amount of domains without exceptions to update
+    human_domains = get_succesful_domain_ids()
+    domains_to_update_amount = int(len(human_domains) * training_data_amount)
+
     # The current amount of domains used in training is already set, we're done here
-    if domains_used_in_training_count == amount_to_randomise:
-        print(f"✅ Correct amount of domains used in training already set to {amount_to_randomise*100:.0f}%!")
+    if domains_used_in_training_count == domains_to_update_amount:
+        print(f"✅ Correct amount of domains used in training already set to {training_data_amount*100:.0f}%!")
         return
 
-    # Set VALIDATION_AMOUNT% of domains to have used_in_training = FALSE
-    human_domains = get_succesful_domain_ids()
-    ids_to_exclude = random.sample(human_domains, domains_to_update_amount)
+    # Get a random sample of domains to update to use in training
+    ids_to_update = random.sample(human_domains, domains_to_update_amount)
 
     # Update the domains to be used in training
-    print(f"📊 Randomly updating {domains_to_update_amount*100:.0f}% of domains to be used in training...")
-    sql = "UPDATE domains SET used_in_training = FALSE WHERE domain_id IN ("
-    for id_to_exclude in ids_to_exclude:
+    print(f"📊 Randomly updating {training_data_amount*100:.0f}% of domains to be used in training...")
+    sql = "UPDATE domains SET used_in_training = TRUE WHERE domain_id IN ("
+    for id_to_exclude in ids_to_update:
         sql += f"{id_to_exclude},"
     sql = sql[:-1] + ")"
 
@@ -741,21 +731,19 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
     conn = get_conn()
     cur = conn.cursor()
 
-    successful_domain_ids = get_succesful_domain_ids()
-
     labels_count = get_count('labels', cur)
     if labels_count == 0:
         print("🚨 Missing labels in the database!")
         os._exit(1)
 
-    # Format the domain IDs for SQL query
-    domain_ids_str = ','.join(map(str, successful_domain_ids))
-
     sql_query = f'''
         SELECT d.screenshot, GROUP_CONCAT(l.topic_id), d.used_in_training
         FROM domains d
         INNER JOIN labels AS l ON d.domain_id = l.domain_id
-        WHERE d.domain_id IN ({domain_ids_str})
+        INNER JOIN metrics AS m ON d.domain_id = m.domain_id
+        INNER JOIN metrics_sessions AS ms ON m.metric_id = ms.metric_id
+        WHERE ms.session_id = (SELECT MAX(session_id) FROM sessions)
+            AND m.exception IS NULL
         GROUP BY d.domain_id
         ORDER BY d.ranking DESC
     '''

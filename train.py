@@ -10,6 +10,7 @@ from tensorflow.keras.utils import plot_model
 
 import sys
 import datetime
+import os
 
 import db
 
@@ -74,6 +75,10 @@ def train():
 
     timestamp = datetime.datetime.now().strftime("%H%M%S-%d%m%Y")
     model_name = f"model-{timestamp}"
+
+    if not os.path.exists("research_data/models"):
+        os.mkdir("research_data/models")
+
     model.save(f"research_data/models/{model_name}.keras")
 
     # # Evaluate the model
