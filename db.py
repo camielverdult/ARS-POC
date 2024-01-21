@@ -298,48 +298,48 @@ def init_db(filename: str = None):
     conn.commit()
     conn.close()
 
-def seed_domains():
-    # Read domains from CSV file
-    domains_df = pd.read_csv('tranco_N7VPW.csv', header=None)
+# def seed_domains():
+#     # Read domains from CSV file
+#     domains_df = pd.read_csv('tranco_N7VPW.csv', header=None)
 
-    conn = get_conn()
-    cur = conn.cursor()
+#     conn = get_conn()
+#     cur = conn.cursor()
 
-    # Build SQL statement to bulk-insert domains with popularity ranking and domain URL keys into the database
-    print(f"📝 Inserting first {DOMAIN_AMOUNT} domains into the database...")
-    sql = "INSERT INTO domains (ranking, domain) VALUES "
+#     # Build SQL statement to bulk-insert domains with popularity ranking and domain URL keys into the database
+#     print(f"📝 Inserting first {DOMAIN_AMOUNT} domains into the database...")
+#     sql = "INSERT INTO domains (ranking, domain) VALUES "
 
-    # Grab domains from the CSV file
-    domains = domains_df[:DOMAIN_AMOUNT].values.tolist()
+#     # Grab domains from the CSV file
+#     domains = domains_df[:DOMAIN_AMOUNT].values.tolist()
 
-    # Add the domains to the SQL statement that are not in the BAD_DOMAINS list
-    for domain in domains:
-        if domain[1] not in BAD_DOMAINS:
-            sql += f"({domain[0]}, '{domain[1]}'),"
+#     # Add the domains to the SQL statement that are not in the BAD_DOMAINS list
+#     for domain in domains:
+#         if domain[1] not in BAD_DOMAINS:
+#             sql += f"({domain[0]}, '{domain[1]}'),"
 
-    # Remove the trailing comma
-    sql = sql[:-1]
+#     # Remove the trailing comma
+#     sql = sql[:-1]
     
-    # Execute the SQL statement and check for errors
-    try:
-        cur.execute(sql)
-    except sqlite3.Error as e:
-        print(f"Error inserting domains: {e}")
-        os._exit(1)
+#     # Execute the SQL statement and check for errors
+#     try:
+#         cur.execute(sql)
+#     except sqlite3.Error as e:
+#         print(f"Error inserting domains: {e}")
+#         os._exit(1)
 
-    # Commit the changes to the database
-    conn.commit()
+#     # Commit the changes to the database
+#     conn.commit()
 
-    cur.close()
-    conn.close()
+#     cur.close()
+#     conn.close()
 
-def seed_labels():
-
+def seed_domains_and_labels():
     domain_ranking_directory = pathlib.Path("top_websites_by_country")
     files = [x for x in domain_ranking_directory.glob("*.csv")]
 
     df_list = []
     for file in files:
+        print(f"📝 Inserting domains from {file.name} into the database...")
         df = pd.read_csv(file, delimiter=',', on_bad_lines='warn')
         df_list.append(df)
 
@@ -374,6 +374,12 @@ def seed_labels():
     conn = get_conn()
     cur = conn.cursor()
 
+    # Insert all domains into the domains table
+    for domain in distinct_domains:
+        cur.execute("INSERT OR IGNORE INTO domains (domain, ranking) VALUES (?, ?)", (domain['domain'], domain['rank']))
+
+    conn.commit()
+
     # Insert the categories into the topics table
     for category_id, category in enumerate(distinct_categories):
         cur.execute("INSERT OR IGNORE INTO topics (topic_id, name) VALUES (?, ?)", (category_id, category))
@@ -396,8 +402,7 @@ def seed_labels():
 
 def seed():
     init_db()
-    seed_domains()
-    seed_labels()
+    seed_domains_and_labels()
 
 def backup():
     # Define backup directory
@@ -549,7 +554,7 @@ def get_labeled_domains() -> list:
         FROM domains d
         LEFT JOIN metrics m ON d.domain_id = m.domain_id
         LEFT JOIN metrics_sessions ms ON m.metric_id = ms.metric_id
-        WHERE ms.session_id = {get_latest_session_id(cur)}
+        WHERE ms.session_id = (SELECT max(session_id) from sessions)
     ''')
 
     # Convert the domain IDs to a list
@@ -812,6 +817,8 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
     return (np.array(training_images), np.array(training_labels), np.array(validation_images), np.array(validation_labels))
 
 if __name__ == '__main__':
+    seed()
+    os._exit(0)
     # Check arguments
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
