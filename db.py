@@ -13,7 +13,7 @@ import pathlib
 DB_FILENAME = 'screenshots.sqlite3'
 DOMAIN_AMOUNT = 110000
 VALIDATION_AMOUNT = 0.2
-INPUT_SIZE = 256
+INPUT_SIZE = 512
 
 # These domains triggered MalwareBytes and contain Riskware, Trojans, Malvertising, are compromised, etc.
 # AKA bad stuff that we don't want to visit
@@ -294,6 +294,28 @@ def init_db(filename: str = None):
     cur.execute('''
         CREATE INDEX IF NOT EXISTS idx_metrics_domain_id ON metrics(domain_id)
     ''')
+
+    # Model data table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS model_data
+        (model_data_id INTEGER PRIMARY KEY,
+            model_name TEXT,
+            metric_session_id INTEGER,
+            timestamp TEXT,
+            FOREIGN KEY(metric_session_id) REFERENCES metrics_sessions(metric_id))
+    ''')
+
+    # Model training results
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS model_results
+        (model_result_id INTEGER PRIMARY KEY,
+            model_data_id INTEGER,
+            test_loss REAL,
+            test_accuracy REAL,
+            FOREIGN KEY(model_data_id) REFERENCES model_data(model_data_id))
+    ''')
+
+    
     
     conn.commit()
     conn.close()
@@ -727,7 +749,7 @@ def update_domain_label(domain: str, label: str):
     cur.close()
     conn.close()
 
-def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
+def get_training_data(limit: int = None, validation_data_only = False) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
         Returns the screenshot image data and labels/topics for all labeled domains. Only succesful domains are used in training/validation. The labels are returned as a binary vector.
         @param limit: The amount of domains to return
@@ -741,6 +763,11 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
         print("🚨 Missing labels in the database!")
         os._exit(1)
 
+    extra_premise = ""
+
+    if validation_data_only:
+        extra_premise = "AND d.used_in_training IS FALSE"
+
     sql_query = f'''
         SELECT d.screenshot, GROUP_CONCAT(l.topic_id), d.used_in_training
         FROM domains d
@@ -748,7 +775,7 @@ def get_training_data(limit: int = None) -> (np.ndarray, np.ndarray, np.ndarray,
         INNER JOIN metrics AS m ON d.domain_id = m.domain_id
         INNER JOIN metrics_sessions AS ms ON m.metric_id = ms.metric_id
         WHERE ms.session_id = (SELECT MAX(session_id) FROM sessions)
-            AND m.exception IS NULL
+            AND m.exception IS NULL {extra_premise}
         GROUP BY d.domain_id
         ORDER BY d.ranking DESC
     '''
