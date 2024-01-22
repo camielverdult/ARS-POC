@@ -117,7 +117,7 @@ def train():
     best_model_path = os.path.join(model_dir, "best.keras")
 
     # Callback for saving the best model
-    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
     checkpoint = ModelCheckpoint(best_model_path, monitor='val_accuracy', verbose=1, save_best_only=True, mode='max')
 
     # Include checkpoint callback in the list
@@ -164,27 +164,66 @@ def train():
     conn = db.get_conn()
     cur = conn.cursor()
 
-    cur.execute('SELECT name FROM topics ORDER BY topic_id ASC')
-    topics = cur.fetchall()
-    topics = [topic[0] for topic in topics]
 
     # Process the report to extract metrics
     lines = report.split('\n')[2:-5]  # Ignore the header and summary lines
-    precision = [float(line.split()[1]) for line in lines]
 
-    # Check if the number of topics matches the number of precision values
-    if len(topics) != len(precision):
-        raise ValueError("The number of topics does not match the number of entries in the classification report.")
+    data = {}
 
-    # Plotting
-    report_filename = os.path.join(model_dir, 'classification-report.png')
-    plt.figure(figsize=(10, 8))
-    plt.bar(topics, precision)
+    # Extracting metrics and building a dictionary
+    for line in lines:
+        parts = line.split()
+        topic_id = int(parts[0])
+        precision, recall, f1_score, support = map(float, parts[1:4]) + [int(parts[4])]
+
+        data[str(topic_id)] = {
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'support': support
+        }
+
+    # Fetch topic names based on IDs
+    topic_ids = list(data.keys())
+    cur.execute(f'SELECT name FROM topics WHERE topic_id in ({",".join("?"*len(topic_ids))})', topic_ids)
+    fetched_topics = cur.fetchall()
+
+    # Update data dictionary with topic names
+    for topic_id, (topic_name,) in zip(topic_ids, fetched_topics):
+        data[topic_name] = data.pop(topic_id)
+
+    # Prepare data for plotting
+    topics = list(data.keys())
+    precisions = [data[topic]['precision'] for topic in topics]
+    recalls = [data[topic]['recall'] for topic in topics]
+    f1_scores = [data[topic]['f1_score'] for topic in topics]
+    supports = [data[topic]['support'] for topic in topics]
+
+    # Creating a grouped bar chart
+    x = np.arange(len(topics))  # the label locations
+    width = 0.2  # the width of the bars
+
+    fig, ax = plt.subplots(figsize=(15, 8))
+    rects1 = ax.bar(x - width*1.5, precisions, width, label='Precision')
+    rects2 = ax.bar(x - width/2, recalls, width, label='Recall')
+    rects3 = ax.bar(x + width/2, f1_scores, width, label='F1-Score')
+    rects4 = ax.bar(x + width*1.5, supports, width, label='Support')
+
+    # Add some text for labels, title, and custom x-axis tick labels
+    ax.set_xlabel('Topics')
+    ax.set_ylabel('Scores')
+    ax.set_title('Classification Report by Topic')
+    ax.set_xticks(x)
+    ax.set_xticklabels(topics)
+    ax.legend()
+
+    # Rotate the topic names for better visibility
     plt.xticks(rotation=45)
-    plt.xlabel('Topic')
-    plt.ylabel('Precision')
-    plt.title('Classification Report')
+
+    # Save the plot
+    report_filename = os.path.join(model_dir, 'classification-report.png')
     plt.savefig(report_filename)
+    plt.show()
 
     # Save Performance Graphs
     def plot_history_key(history_key, title, ylabel, filename):
