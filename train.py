@@ -1,20 +1,20 @@
-from PIL import Image
-import numpy as np
-import tensorflow as tf
-
-from keras.preprocessing.sequence import pad_sequences
-from sklearn.model_selection import train_test_split
-
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers, models, callbacks
 from tensorflow.keras.utils import plot_model
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.losses import SparseCategoricalCrossentropy
 
-import sys
+import evaluate
+import numpy as np
+
 import datetime
 import os
+import pathlib
+import sys
 
 import db
 
 INPUT_SIZE = db.INPUT_SIZE
+DROPOUT_RATE = 0.25
 
 def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
     '''Creates a convolutional neural network model'''
@@ -24,26 +24,29 @@ def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
 
     if topic_mapping_count == 0:
         raise Exception("No topic mappings found in the database")
-
     
     # We have a multi-class classification problem, the last layer should have
     # as many  neurons as there are classes, and you should use a softmax 
     # activation function. The loss function should be categorical_crossentropy.
     model = models.Sequential([
-        layers.Conv2D(32, (3, 3), activation='relu', input_shape=(input_size, input_size, 3)),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(128, (3, 3), activation='relu'),
+        layers.Conv2D(32, 3, padding='same', activation='relu', input_shape=(input_size, input_size, 3)),
+        layers.MaxPooling2D(),
+
+        layers.Conv2D(64, 3, padding='same', activation='relu'),
+        layers.MaxPooling2D(),
+        
+        layers.Conv2D(128, 3, padding='same', activation='relu'),
+        layers.MaxPooling2D(),
+        
+        layers.Conv2D(256, 3, padding='same', activation='relu'),
+        layers.MaxPooling2D(),
+
         layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(topic_mapping_count, activation='sigmoid')  # Adjust the output layer based on the number of topics
+        layers.Dense(512, activation='relu'),
+        layers.Dense(topic_mapping_count, activation='sigmoid') 
     ])
 
-    # Compile the model
-    model.compile(optimizer='adam',
-                loss='categorical_crossentropy',
-                metrics=['accuracy'])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
     return model
 
@@ -68,7 +71,23 @@ def train():
 
     # Train the model
     print("🦾 Training model...")
-    model.fit(training_images, training_labels, epochs=10, validation_data=(validation_images, validation_labels))
+
+    augmented_data_gen = ImageDataGenerator(
+        rotation_range=20,       # Degree range for random rotations
+        width_shift_range=0.2,   # Fraction of total width for horizontal shift
+        height_shift_range=0.2,  # Fraction of total height for vertical shift
+        shear_range=0.2,         # Shear Intensity
+        zoom_range=0.2,          # Range for random zoom
+        horizontal_flip=True,    # Randomly flip inputs horizontally
+        fill_mode='nearest'      # Strategy to fill newly created pixels
+    )
+
+    batch_size = 32
+
+    augmented_training_data = augmented_data_gen.flow(training_images, training_labels, batch_size=batch_size)
+
+    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    model.fit(augmented_training_data, steps_per_epoch=len(training_images) // batch_size, validation_data=(validation_images, validation_labels), epochs=100, callbacks=[early_stopping])
 
     # Save the model with timestamp
     print("💾 Saving model...")
@@ -81,14 +100,55 @@ def train():
 
     model.save(f"research_data/models/{model_name}.keras")
 
-    # # Evaluate the model
-    # print("🧾 Evaluating model...")
-    # test_loss, test_acc = model.evaluate(images_test, labels_test, verbose=2)
+def evaluate_model(model_path: pathlib.Path):
+    '''Evaluates a model'''
+    # Load the model
+    model = models.load_model(model_path)
+
+    # Load and preprocess images and labels
+    print("📷 Preparing images and labels...")
+
+    # Split the data into training and testing sets
+    print("📊 Preparing test and training datasets...")
+    _training_images, _training_labels, validation_images, validation_labels = db.get_training_data(validation_data_only=True)
+
+    # Get predictions on validation images
+    print("🦾 Getting predictions...")
+    raw_predictions = model.predict(validation_images)
+    predictions = np.argmax(raw_predictions, axis=1).astype('int32')
+
+    validation_labels = np.argmax(validation_labels, axis=1).astype('int32')
+
+    print(f"Predictions type: {predictions.dtype}, Labels type: {validation_labels.dtype}")
+
+    # Use evaluation library, example: accuracy.compute(references=[0,1,0,1], predictions=[1,0,0,1])
+    print("📈 Evaluating model...")
+    accuracy = evaluate.load("accuracy")
+    accuracy_results = accuracy.compute(references=validation_labels, predictions=predictions)
+    print(accuracy_results)
 
 if __name__ == "__main__":
+    # Check arguments
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
+        os._exit(1)
+
+    command = sys.argv[1]
+
     # Check args for 'plot' to plot the model
-    if len(sys.argv) > 1 and sys.argv[1] == 'plot':
+    if command == 'plot':
         model = get_model()
         make_model_diagram(model)
-    else:
+    elif command == 'train':
         train()
+    elif command == 'evaluate':
+        model_path = sys.argv[2]
+
+        if not os.path.exists(model_path):
+            print(f"Model file not found: {model_path}")
+            os._exit(1)
+
+        evaluate_model(pathlib.Path(model_path))
+    else:
+        print(f"Unknown command: {command}")
+        os._exit(1)
