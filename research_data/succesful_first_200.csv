@@ -1,7 +1,0 @@
-exception,exception_ratio
-success,0.565
-403,0.005
-404,0.015
-neterror,0.275
-timeout,0.03
-ublock,0.11

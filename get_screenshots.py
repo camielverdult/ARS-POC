@@ -17,7 +17,7 @@ INPUT_SIZE = db.INPUT_SIZE
 # This scales the screenshots to k times the size of the CNN model input size
 # Pictures are in square format, so the width and height are the same
 # This will increase file size, but might also provide better quality downsampled images for the CNN
-WINDOW_SIZE = INPUT_SIZE * 1
+WINDOW_SIZE = min(INPUT_SIZE * 2, 1024)
 
 # Number of browsers to run in parallel per CPU thread
 BROWSERS_PER_CORE = 1.5
@@ -42,7 +42,7 @@ def setup_driver():
     
     return driver
 
-def calc_process_count():
+def calc_process_count(work: list):
     # Get the number of CPU cores
     cpu_cores = psutil.cpu_count(logical=True)
 
@@ -58,18 +58,12 @@ def calc_process_count():
     processes_based_on_memory = int(available_memory / memory_per_process)
 
     # Return the minimum of the two calculations as the optimal process count
-    return min(processes_based_on_cpu, processes_based_on_memory)
-
-def get_screenshot_path_for_domain(domain: str) -> str:
-    domain_name = domain.replace('.', '-')
-    return f"screenshots/{domain_name}.png"
+    return min(processes_based_on_cpu, processes_based_on_memory, len(work))
 
 def take_screenshots(domain_ids: list):
     driver = setup_driver()
     conn = db.get_conn()
     cur = conn.cursor()
-
-    session_id = db.get_latest_session_id(cur)
 
     # Get both domain_id and domain
     query = "SELECT domain_id, domain FROM domains WHERE domain_id IN ({})".format(','.join('?' * len(domain_ids)))
@@ -78,11 +72,12 @@ def take_screenshots(domain_ids: list):
     # Map domain_id to domain
     domain_mapping = {row[0]: row[1] for row in cur.fetchall()}
 
+    session_id = db.get_latest_session_id(cur)
+
     # Exception handling for the process running this function 
     try:
         for domain_id, domain_url in domain_mapping.items():
-            filename = get_screenshot_path_for_domain(domain_url)
-            ignored = False
+            filename = db.get_screenshot_path_for_domain(domain_url)
 
             start_time = time.time()
             exception_type = None
@@ -95,20 +90,17 @@ def take_screenshots(domain_ids: list):
                 # Check for 404 on website title or content
                 if "404" in driver.title or "404 Not found" in driver.page_source:
                     print(f"🚫 {domain_url} (404)")
-                    ignored = True
                     exception_type = "404"
                 elif "403" in driver.title or "403 Forbidden" in driver.page_source:
                     print(f"🚫 {domain_url} (403)")
-                    ignored = True
                     exception_type = "403"
                 # Check if the domain is blocked by the uBlock extension
                 elif "Page blocked" in driver.title:
                     print(f"🚫 {domain_url} (uBlocked)")
-                    ignored = True
                     exception_type = "ublock"
                 else:
                     try:
-                        # Destroy abnoxious popups
+                        # Destroy obnoxious popups
                         driver.find_element(By.ID, "dialog-close").click()
                         time.sleep(1)
                     except:
@@ -132,18 +124,16 @@ def take_screenshots(domain_ids: list):
                     print(f"🌐 {domain_url} (timeout error)")
                 elif "dnsNotFound" in error:
                     filename = None
-                    ignored = True # Ignore this domain in the future
                     exception_type = "dnsNotFound"
-                    print(f"🤖 {domain_url} (ignored in future)")
+                    print(f"🤖 {domain_url} (skipped in future)")
                 elif "neterror" in error:
                     filename = None
                     exception_type = "neterror"
                     print(f"🌐 {domain_url} (network error)")
                 elif "InsecureCertificateError" in error:
                     filename = None
-                    ignored = True
                     exception_type = "insecure"
-                    print(f"🤔 {domain_url} (insecure, ignored in future)")
+                    print(f"🤔 {domain_url} (insecure, skipped in future)")
                 else:
                     # Error taking screenshot for yandex.net: <class 'selenium.common.exceptions.WebDriverException'>
                     print(f"Error taking screenshot for {domain_url}: {type(e)}\n{e}")
@@ -154,29 +144,18 @@ def take_screenshots(domain_ids: list):
                 exception_type = "unknown"
                 print(f"Unexpected error when taking screenshot for {domain_url}: {e}")
 
-            if ignored:
+            if exception_type is not None:
                 filename = None
 
             cur.execute(
-                "UPDATE domains SET screenshot = ?, ignored = ? WHERE domain_id = ?",
-                (filename, ignored, domain_id)
+                "UPDATE domains SET screenshot = ? WHERE domain_id = ?",
+                (filename, domain_id)
             )
 
             end_time = time.time()
 
             # Insert screenshot process metrics and retrieve the ID
-            cur.execute(
-                "INSERT INTO metrics (domain_id, start_time, end_time, exception) VALUES (?, ?, ?, ?)",
-                (domain_id, start_time, end_time, exception_type)
-            )
-
-            # Insert session ID and domain ID into metrics_sessions table
-            cur.execute(
-                "INSERT INTO metrics_sessions (session_id, metric_id) VALUES (?, ?)",
-                (session_id, cur.lastrowid)
-            )
-
-            conn.commit()
+            db.insert_metric(domain_id, start_time, end_time, exception_type, session_id, cur, conn)
     except Exception as e:
         print(f"Error in Process: {e}")
     finally:
@@ -200,8 +179,8 @@ def screenshot_domains():
     # Get start time for benchmarking
     start_time = time.time()
 
-    # Fetch domain IDs that are not ignored
-    domain_ids, description = db.get_unprocessed_domains(with_labels=True)
+    # Fetch domain IDs that do not have an exception
+    domain_ids = db.get_unprocessed_domains()
 
     if not domain_ids: # <=> len(domain_ids) == 0
         print("🎉 All domains have already been processed!")
@@ -213,11 +192,11 @@ def screenshot_domains():
 
     # Define the number of processes and chunk size for multiprocessing, based on the number of cores in the system
     # The number of processes will not exceed over 16 due to memory constraints
-    num_processes = calc_process_count()
+    num_processes = calc_process_count(domain_ids)
     chunk_size = len(domain_ids) // num_processes + (len(domain_ids) % num_processes > 0)
 
     # Use multiprocessing to take screenshots
-    print(f"🚀 Visiting {description} domains ({len(domain_ids)}) with {num_processes} processes...")
+    print(f"🚀 Visiting {len(domain_ids)} domains with {num_processes} processes...")
     with multiprocessing.Pool(processes=num_processes) as pool:
         for _ in pool.imap_unordered(take_screenshots, chunker(domain_ids, chunk_size)):
             pass

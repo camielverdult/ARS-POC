@@ -10,7 +10,7 @@ def plot_screenshot_results():
     '''
 
     # Load db conn
-    conn = db.get_conn("research_data/succesful_first_200.sqlite3")
+    conn = db.get_conn()
 
     # Get data
     cur = conn.cursor()
@@ -44,17 +44,17 @@ def plot_screenshot_results():
     exceptions_with_counts = cur.execute("""
         SELECT exception, COUNT(*) FROM metrics 
         WHERE metrics.exception IS NOT NULL GROUP BY metrics.exception
+        ORDER BY COUNT(*) ASC
     """).fetchall()
 
     # Find the ratio of successes to total exceptions and per exception type
-    total_exceptions = sum([count for _, count in exceptions_with_counts])
     success_ratio = success_count / total_count
     
     # Find the ratio of each exception type to total exceptions
     exception_ratios = [(exception, count / total_count) for exception, count in exceptions_with_counts]
 
     # Write the ratios to a csv file
-    with open('research_data/succesful_first_200.csv', 'w') as f:
+    with open('research_data/screenshot_results.csv', 'w') as f:
         f.write('exception,exception_ratio\n')
         f.write(f'success,{success_ratio}\n')
         for exception, ratio in exception_ratios:
@@ -83,8 +83,8 @@ def plot_screenshot_results():
     plt.rcParams.update({'font.size': 10})
 
     # Save the plot as a svg file
-    plt.savefig('research_data/succesful_first_200.svg')
-    plt.savefig('research_data/succesful_first_200.png')
+    plt.savefig('research_data/screenshot_results.svg')
+    plt.savefig('research_data/screenshot_results.png')
 
 if __name__ == "__main__":
     plot_screenshot_results()

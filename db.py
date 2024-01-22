@@ -20,10 +20,12 @@ INPUT_SIZE = 512
 BAD_DOMAINS = ["e7z9t4x6a0v5mk3zo1a0xj2z7c6g8sa6js5z7s2c3h9x0s5fh3a6sjwb8q7m.xyz", "onlyindianx.cc", "tokyomotion.net", "heylink.me", "tamilyogi.plus", "zcswet.com", "bidmachine.io", "doodstream.io", "1024tera.com", "mobile-tracker-free.com", "yadongtube.net", "vlxx.moe", "ai-lawandorder.com", "worldfcdn2.com", "edgesuite.net"]
 
 def get_conn(filename=None):
+    # Open a thread-safe connection to the database
+    # to prevent: 'database is locked' errors
     if filename:
-        return sqlite3.connect(filename)
+        return sqlite3.connect(filename, check_same_thread=False)
     
-    return sqlite3.connect(DB_FILENAME)
+    return sqlite3.connect(DB_FILENAME, check_same_thread=False)
 
 def get_count(table_name: str, cur: sqlite3.Cursor = None, select: str = None, where: str = None, error_callback_fn = None) -> int:
     """Returns the amount of rows in a table"""
@@ -90,9 +92,6 @@ def start_session(device_info: str) -> int:
 
     return session_id
 
-import sqlite3
-import os
-
 def get_latest_session_id(cur: sqlite3.Cursor = None) -> int:
     """Returns the latest session ID"""
     # Connect to the database
@@ -103,7 +102,7 @@ def get_latest_session_id(cur: sqlite3.Cursor = None) -> int:
         cur_started = True
 
     # Get the session ID and device info
-    cur.execute("SELECT session_id FROM sessions WHERE start_time = (SELECT MAX(start_time) FROM sessions WHERE end_time IS NULL)")
+    cur.execute("SELECT MAX(session_id) FROM sessions")
 
     # Get the session ID
     session_id = cur.fetchone()[0]
@@ -113,6 +112,29 @@ def get_latest_session_id(cur: sqlite3.Cursor = None) -> int:
         conn.close()
 
     return session_id
+
+def insert_metric(domain_id: int, start_time: float, end_time: float, exception: str|None, session_id: int, cur: sqlite3.Cursor = None, conn: sqlite3.Connection = None) -> int:
+    """Inserts a metric and returns the metric ID"""
+    # Connect to the database
+    cur_started = False
+    if not cur:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur_started = True
+
+    # Get the session ID and device info
+    cur.execute("INSERT INTO metrics (domain_id, start_time, end_time, exception) VALUES (?, ?, ?, ?)", (domain_id, start_time, end_time, exception))
+    cur.execute("INSERT INTO metrics_sessions (session_id, metric_id) VALUES (?, ?)", (session_id, cur.lastrowid))
+    conn.commit()
+
+    # Get the session ID
+    metric_id = cur.lastrowid
+
+    if cur_started:
+        cur.close()
+        conn.close()
+
+    return metric_id
 
 def get_session_metrics(session_id: int) -> dict:
     """Returns the session data including various metrics for the specific session."""
@@ -189,7 +211,6 @@ def init_db(filename: str = None):
             ranking INTEGER,
             domain TEXT UNIQUE,
             screenshot TEXT,
-            ignored BOOLEAN DEFAULT FALSE,
             used_in_training BOOLEAN DEFAULT FALSE
         )
     ''')
@@ -197,11 +218,6 @@ def init_db(filename: str = None):
     # JOIN optimalization: Create index on domain_id column in domains table
     cur.execute('''
         CREATE INDEX IF NOT EXISTS idx_domains_domain_id ON domains(domain_id)
-    ''')
-
-    # Index on ignored column in domains table
-    cur.execute('''
-        CREATE INDEX IF NOT EXISTS idx_domains_ignored ON domains(ignored);
     ''')
 
     # Create topics table
@@ -315,45 +331,8 @@ def init_db(filename: str = None):
             FOREIGN KEY(model_data_id) REFERENCES model_data(model_data_id))
     ''')
 
-    
-    
     conn.commit()
     conn.close()
-
-# def seed_domains():
-#     # Read domains from CSV file
-#     domains_df = pd.read_csv('tranco_N7VPW.csv', header=None)
-
-#     conn = get_conn()
-#     cur = conn.cursor()
-
-#     # Build SQL statement to bulk-insert domains with popularity ranking and domain URL keys into the database
-#     print(f"📝 Inserting first {DOMAIN_AMOUNT} domains into the database...")
-#     sql = "INSERT INTO domains (ranking, domain) VALUES "
-
-#     # Grab domains from the CSV file
-#     domains = domains_df[:DOMAIN_AMOUNT].values.tolist()
-
-#     # Add the domains to the SQL statement that are not in the BAD_DOMAINS list
-#     for domain in domains:
-#         if domain[1] not in BAD_DOMAINS:
-#             sql += f"({domain[0]}, '{domain[1]}'),"
-
-#     # Remove the trailing comma
-#     sql = sql[:-1]
-    
-#     # Execute the SQL statement and check for errors
-#     try:
-#         cur.execute(sql)
-#     except sqlite3.Error as e:
-#         print(f"Error inserting domains: {e}")
-#         os._exit(1)
-
-#     # Commit the changes to the database
-#     conn.commit()
-
-#     cur.close()
-#     conn.close()
 
 def seed_domains_and_labels():
     domain_ranking_directory = pathlib.Path("top_websites_by_country")
@@ -384,6 +363,9 @@ def seed_domains_and_labels():
 
     # Converting the distinct DataFrame to a list of dictionaries
     distinct_domains = distinct_df.to_dict(orient='records')
+
+    # Remove urls that are in BAD_DOMAINS
+    distinct_domains = [domain for domain in distinct_domains if domain['domain'] not in BAD_DOMAINS]
 
     # Get all categories from the distinct domains
     categories = []
@@ -449,9 +431,9 @@ def purge():
         conn = get_conn()
         cur = conn.cursor()
 
-        print("🗑️ Purging database... (keeping ignored domains!)")
+        print("🗑️ Purging database... (keeping succesful domains!)")
 
-        # Drop all tables but keep ignored metrics
+        # Drop all tables but keep metrics without an exception
         cur.execute("DROP TABLE IF EXISTS topics")
         cur.execute("DROP TABLE IF EXISTS labels")
 
@@ -462,7 +444,6 @@ def purge():
         cur.execute("DELETE FROM domains WHERE domain_id NOT IN (SELECT domain_id FROM metrics)")
 
         # Drop indexes
-        cur.execute("DROP INDEX IF EXISTS idx_ignored")
         cur.execute("DROP INDEX IF EXISTS idx_domain_id")
         cur.execute("DROP INDEX IF EXISTS idx_topic_id")
         cur.execute("DROP INDEX IF EXISTS idx_start_time_null")
@@ -505,22 +486,6 @@ def get_domain_id(domain, open_cur: sqlite3.Cursor = None) -> int:
 
     return domain_id[0]
 
-def get_topics() -> list:
-    """Returns a list of topics from the database"""
-    conn = get_conn()
-    cur = conn.cursor()
-
-    # Get all topics
-    cur.execute('SELECT * FROM topics')
-
-    # Convert the topics to a list
-    topics = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    return topics
-
 def get_labels(open_cur: sqlite3.Cursor = None) -> list:
     """Returns the domain_id with its corresponding labels from the database"""
     if not open_cur:
@@ -557,42 +522,12 @@ def get_labels(open_cur: sqlite3.Cursor = None) -> list:
 
     return rows
 
-def get_labeled_domains() -> list:
-    """Returns a list of domain IDs that have been labeled"""
-    conn = get_conn()
-    cur = conn.cursor()
+def get_screenshot_path_for_domain(domain: str) -> str:
+    domain_name = domain.replace('.', '-')
+    return f"screenshots/{domain_name}.png"
 
-    # Get all domain IDs that have been labeled
-    cur.execute('SELECT DISTINCT labels.domain_id FROM labels INNER JOIN domains ON labels.domain_id = domains.domain_id')
-
-    # Convert the domain IDs to a list
-    labeled_domains = [row[0] for row in cur.fetchall()]
-
-    # Find domains that do not have metrics from the latest session
-    # These domains have not been processed yet
-    # Use metrics_sessions table to find the latest session
-    cur.execute(f'''
-        SELECT DISTINCT d.domain_id
-        FROM domains d
-        LEFT JOIN metrics m ON d.domain_id = m.domain_id
-        LEFT JOIN metrics_sessions ms ON m.metric_id = ms.metric_id
-        WHERE ms.session_id = (SELECT max(session_id) from sessions)
-    ''')
-
-    # Convert the domain IDs to a list
-    processed_domain_ids = [row[0] for row in cur.fetchall()]
-
-    # Get the difference between the two lists
-    unlabeled_domain_ids = list(set(labeled_domains) - set(processed_domain_ids))
-
-    cur.close()
-    conn.close()
-
-    return unlabeled_domain_ids
-
-def get_unprocessed_domains(with_labels = False) -> (list[int], str):
-    """Returns a list of domain IDs that have not been processed yet and are not ignored or have had an exception."""
-
+def get_unprocessed_domains() -> list[int]:
+    """Returns a list of domain IDs that have not been screenshotted yet."""
     # Connect to the database
     conn = get_conn()
     cur = conn.cursor()
@@ -600,43 +535,56 @@ def get_unprocessed_domains(with_labels = False) -> (list[int], str):
     # Check if we have an empty metrics table, because then we need to process all domains
     metrics_count = get_count('metrics', cur)
 
-    # Check if the amount of metrics we have is less than the amount of domains we have
-    # If so, we need to process all domains
-    domains_count = get_count('domains', cur)
-
-    description = ""
-    labeled_domains = get_labels(cur)
-    labeled_domains = ','.join(map(str, [domain_id for domain_id, _ in labeled_domains]))
-
     # If the metrics table is empty, we need to process all domains
-    if metrics_count == 0 or metrics_count < domains_count:
-        # Get all domain IDs that are not ignored and not in the BAD_DOMAINS list
-        # Only find domains with a label
-        sql_query = f"""
-            SELECT domain_id FROM domains
-            WHERE domain_id IN ({labeled_domains})
-        """
-        description = "all"
-    else:
-        # Get all domain IDs that have not been processed yet and are not ignored or have had a timeout exception
-        sql_query = f"""
-            SELECT DISTINCT d.domain_id 
-            FROM domains d
-            LEFT JOIN metrics m ON d.domain_id = m.domain_id
-            WHERE (m.start_time IS NULL OR m.start_time < datetime('now', '-1 day')) AND domain_id IN ({labeled_domains})
-            AND (d.ignored IS FALSE)
-            AND (m.exception IS NULL)
-        """
-        description = "exceptionless"
+    if metrics_count == 0:
+        # Get all domains
+        cur.execute(f"""
+            SELECT domain_id, domain FROM domains
+        """)
 
-    # Execute the query
-    cur.execute(sql_query)
-    unprocessed_domain_ids = [row[0] for row in cur.fetchall()]
+    else:    
+        """This part is ran when we have already processed domains before"""
+
+        # Get all domains that have no exception
+        cur.execute("""
+            SELECT DISTINCT d.domain_id, d.domain
+            FROM domains d
+            INNER JOIN metrics m ON d.domain_id = m.domain_id
+            WHERE (m.exception IS NULL)
+        """)
+
+    unprocessed_domain_ids = cur.fetchall()
+
+    domains_to_process = []
+
+    latest_session_id = get_latest_session_id(cur)
+
+    # Remove domains that have a screenshot file
+    for domain_id, domain_url in unprocessed_domain_ids:
+        filename = get_screenshot_path_for_domain(domain_url)
+        if os.path.exists(filename):
+            metric = cur.execute(f"SELECT metric_id FROM metrics WHERE domain_id = {domain_id}").fetchone()
+            screenshot_set = cur.execute(f"SELECT screenshot FROM domains WHERE domain_id = {domain_id}").fetchone()
+            # Domain already has a screenshot, so we only need to add a metric if it does not exist
+            if not metric:
+                insert_metric(domain_id, None, None, None, latest_session_id, cur, conn)
+
+            if not screenshot_set:
+                cur.execute(
+                    "UPDATE domains SET screenshot = ? WHERE domain_id = ?",
+                    (filename, domain_id)
+                )
+        else:
+            # Domain will be screenshotted and a metric will be added
+            domains_to_process.append(domain_id)
+
+    # We now have a list of new domain IDs that have not been captured yet
+    conn.commit()
 
     cur.close()
     conn.close()
 
-    return (unprocessed_domain_ids, description)
+    return domains_to_process
 
 def get_succesful_domain_ids() -> list[int]:
     """Returns the succesful domains from the latest screenshot session"""
@@ -655,9 +603,7 @@ def get_succesful_domain_ids() -> list[int]:
         SELECT DISTINCT d.domain_id
         FROM domains d
         INNER JOIN metrics AS m ON d.domain_id = m.domain_id
-        INNER JOIN metrics_sessions AS ms ON m.metric_id = ms.metric_id
-        WHERE ms.session_id = (SELECT MAX(session_id) FROM sessions)
-            AND m.exception IS NULL
+        WHERE m.exception IS NULL
         ORDER BY d.ranking ASC
     '''
 
@@ -731,24 +677,6 @@ def get_succesful_domain_urls() -> list[str]:
 
     return [row[0] for row in rows]
 
-def update_domain_label(domain: str, label: str):
-    """Updates the label for a domain"""
-    conn = get_conn()
-    cur = conn.cursor()
-
-    # Update/insert the label for the domain
-    sql_query = f'''
-        UPSERT domains
-        SET label = '{label}'
-        WHERE domain = '{domain}'
-    '''
-
-    cur.execute(sql_query)
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
 def get_training_data(limit: int = None, validation_data_only = False) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
         Returns the screenshot image data and labels/topics for all labeled domains. Only succesful domains are used in training/validation. The labels are returned as a binary vector.
@@ -773,9 +701,7 @@ def get_training_data(limit: int = None, validation_data_only = False) -> (np.nd
         FROM domains d
         INNER JOIN labels AS l ON d.domain_id = l.domain_id
         INNER JOIN metrics AS m ON d.domain_id = m.domain_id
-        INNER JOIN metrics_sessions AS ms ON m.metric_id = ms.metric_id
-        WHERE ms.session_id = (SELECT MAX(session_id) FROM sessions)
-            AND m.exception IS NULL {extra_premise}
+        WHERE m.exception IS NULL {extra_premise}
         GROUP BY d.domain_id
         ORDER BY d.ranking DESC
     '''
