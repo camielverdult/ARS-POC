@@ -5,6 +5,8 @@ tensorflow # Machine learning
 Pillow # Image processing
 numpy # Numerical Python
 scikit-learn # Machine learning
+seaborn # Statistical data visualization
+matplotlib # Plotting
 
 matplotlib # Plotting
 pydot # Graphviz interface

@@ -1,10 +1,16 @@
-from tensorflow.keras import layers, models, callbacks
+from tensorflow.keras import layers, models, callbacks, regularizers
+from keras.callbacks import ModelCheckpoint
+from tensorflow.keras.metrics import BinaryAccuracy, Precision, Recall
+
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.losses import SparseCategoricalCrossentropy
+
+import numpy as np
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 import evaluate
-import numpy as np
 
 import datetime
 import os
@@ -42,11 +48,21 @@ def get_model(input_size: int = INPUT_SIZE) -> models.Sequential:
         layers.MaxPooling2D(),
 
         layers.Flatten(),
-        layers.Dense(512, activation='relu'),
-        layers.Dense(topic_mapping_count, activation='sigmoid') 
+        layers.Dense(512, activation='relu', kernel_regularizer=regularizers.l2(0.001)),
+        layers.Dropout(0.5),
+        layers.Dense(topic_mapping_count, activation='sigmoid')
     ])
 
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    # For multi-label classification, binary accuracy is a suitable metric
+    binary_accuracy = BinaryAccuracy(name='accuracy')
+
+    # Precision and recall are also useful metrics
+    precision = Precision(name='precision')
+    recall = Recall(name='recall')
+
+    model.compile(optimizer='adam',
+                loss='binary_crossentropy',
+                metrics=[binary_accuracy, precision, recall])
 
     return model
 
@@ -65,7 +81,6 @@ def train():
     print("📊 Preparing test and training datasets...")
     training_images, training_labels, validation_images, validation_labels = db.get_training_data()
 
-    # Define a simple CNN model
     print("🦾 Building model...")
     model = get_model()
 
@@ -86,34 +101,38 @@ def train():
 
     augmented_training_data = augmented_data_gen.flow(training_images, training_labels, batch_size=batch_size)
 
-    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-    model.fit(augmented_training_data, steps_per_epoch=len(training_images) // batch_size, validation_data=(validation_images, validation_labels), epochs=100, callbacks=[early_stopping])
 
-    # Save the model with timestamp
-    print("💾 Saving model...")
-
+    # Make model name
     timestamp = datetime.datetime.now().strftime("%H%M%S-%d%m%Y")
-    model_name = f"model-{timestamp}"
+    model_name = f"{timestamp}"
+    model_dir = "research_data/models"
 
     if not os.path.exists("research_data/models"):
         os.mkdir("research_data/models")
 
-    model.save(f"research_data/models/{model_name}.keras")
+    # make new folder for this training
+    model_dir = os.path.join(model_dir, model_name)
+    os.mkdir(model_dir)
 
-def evaluate_model(model_path: pathlib.Path):
-    '''Evaluates a model'''
-    # Load the model
-    model = models.load_model(model_path)
+    # Make model paths
+    model_path = os.path.join(model_dir, "model.keras")
+    best_model_path = os.path.join(model_dir, "best.keras")
 
-    # Load and preprocess images and labels
-    print("📷 Preparing images and labels...")
+    # Callback for saving the best model
+    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
+    checkpoint = ModelCheckpoint(best_model_path, monitor='val_accuracy', verbose=1, save_best_only=True, mode='max')
 
-    # Split the data into training and testing sets
-    print("📊 Preparing test and training datasets...")
-    _training_images, _training_labels, validation_images, validation_labels = db.get_training_data(validation_data_only=True)
+    # Include checkpoint callback in the list
+    callbacks_list = [early_stopping, checkpoint]
 
-    # Get predictions on validation images
-    print("🦾 Getting predictions...")
+    history = model.fit(augmented_training_data, steps_per_epoch=len(training_images) // batch_size, validation_data=(validation_images, validation_labels), epochs=100, callbacks=callbacks_list)
+
+    # Save the model with timestamp
+    print("💾 Saving model...")
+
+    model.save(model_path)
+
+    # This code was originally in the evaluate function
     raw_predictions = model.predict(validation_images)
     predictions = np.argmax(raw_predictions, axis=1).astype('int32')
 
@@ -121,16 +140,45 @@ def evaluate_model(model_path: pathlib.Path):
 
     print(f"Predictions type: {predictions.dtype}, Labels type: {validation_labels.dtype}")
 
-    # Use evaluation library, example: accuracy.compute(references=[0,1,0,1], predictions=[1,0,0,1])
-    print("📈 Evaluating model...")
-    accuracy = evaluate.load("accuracy")
-    accuracy_results = accuracy.compute(references=validation_labels, predictions=predictions)
-    print(accuracy_results)
+    # Confusion Matrix
+    cm = confusion_matrix(validation_labels, predictions)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt="d", cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    cm_filename = os.path.join(model_dir, 'confusion-matrix.png')
+    plt.savefig(cm_filename)
+
+    # Save Classification Report
+    report = classification_report(validation_labels, predictions)
+    print("Classification Report:\n", report)
+    report_filename = os.path.join(model_dir, 'classification-report.txt')
+    with open(report_filename, 'w') as file:
+        file.write(report)
+
+    # Save Performance Graphs
+    def plot_history_key(history_key, title, ylabel, filename):
+        plt.figure(figsize=(8, 6))
+        plt.plot(history.history[history_key], label=f'Training {ylabel}')
+        plt.plot(history.history[f'val_{history_key}'], label=f'Validation {ylabel}')
+        plt.title(title)
+        plt.ylabel(ylabel)
+        plt.xlabel('Epoch')
+        plt.legend(loc='upper left')
+        plot_filename = os.path.join(model_dir, f'{filename}.png')
+        plt.savefig(plot_filename)
+
+    # Accuracy Plot
+    plot_history_key('accuracy', 'Model Accuracy', 'Accuracy', 'accuracy')
+
+    # Loss Plot
+    plot_history_key('loss', 'Model Loss', 'Loss', 'loss')
 
 if __name__ == "__main__":
     # Check arguments
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <init|seed|backup|purge>")
+        print(f"Usage: {sys.argv[0]} <plot|train")
         os._exit(1)
 
     command = sys.argv[1]
@@ -141,14 +189,6 @@ if __name__ == "__main__":
         make_model_diagram(model)
     elif command == 'train':
         train()
-    elif command == 'evaluate':
-        model_path = sys.argv[2]
-
-        if not os.path.exists(model_path):
-            print(f"Model file not found: {model_path}")
-            os._exit(1)
-
-        evaluate_model(pathlib.Path(model_path))
     else:
         print(f"Unknown command: {command}")
         os._exit(1)

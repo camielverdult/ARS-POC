@@ -86,5 +86,71 @@ def plot_screenshot_results():
     plt.savefig('research_data/screenshot_results.svg')
     plt.savefig('research_data/screenshot_results.png')
 
+def plot_label_distribution():
+    conn = db.get_conn()
+    cur = conn.cursor()
+
+    """    # Create domains table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS domains (
+            domain_id INTEGER PRIMARY KEY,
+            ranking INTEGER,
+            domain TEXT UNIQUE,
+            screenshot TEXT,
+            used_in_training BOOLEAN DEFAULT FALSE
+        )
+    ''')
+
+    # JOIN optimalization: Create index on domain_id column in domains table
+    cur.execute('''
+        CREATE INDEX IF NOT EXISTS idx_domains_domain_id ON domains(domain_id)
+    ''')
+
+    # Create topics table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS topics
+        (topic_id INTEGER PRIMARY KEY, name TEXT UNIQUE)
+    ''')
+
+    # Create labels table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS labels
+        (domain_id INTEGER,
+         topic_id INTEGER,
+         FOREIGN KEY(domain_id) REFERENCES domains(domain_id),
+         FOREIGN KEY(topic_id) REFERENCES topics(id))
+    ''')"""
+
+    # Get the label counts for succesful domains (metric not having an exception)
+    label_counts = cur.execute("""
+        SELECT topics.name, COUNT(*) FROM labels 
+        JOIN metrics ON labels.domain_id = metrics.domain_id 
+        JOIN topics ON labels.topic_id = topics.topic_id
+        WHERE metrics.exception IS NULL
+        GROUP BY topics.name
+        ORDER BY COUNT(*) DESC
+        LIMIT 10
+    """).fetchall()
+
+    # Close the database connection
+    conn.close()
+
+    # Convert the data to a pandas Series for easy plotting
+    label_counts = pd.Series(dict(label_counts), name='Count')
+
+    # Plotting, making sure all of the topic names on the x-axis are readable in the plot
+    plt.figure(figsize=(10, 6))
+    label_counts.plot(kind='bar', color='skyblue', edgecolor='black')
+    plt.title('Distribution of 10 most common labels')
+    plt.xlabel('Label')
+    plt.ylabel('Frequency')
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.rcParams.update({'font.size': 10})
+    plt.savefig('research_data/label_distribution.png')
+
+
 if __name__ == "__main__":
     plot_screenshot_results()
+    plot_label_distribution()
