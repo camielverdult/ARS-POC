@@ -10,8 +10,6 @@ from sklearn.metrics import confusion_matrix, classification_report
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-import evaluate
-
 import datetime
 import os
 import pathlib
