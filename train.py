@@ -119,7 +119,7 @@ def train():
     best_model_path = os.path.join(model_dir, "best.keras")
 
     # Callback for saving the best model
-    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
+    early_stopping = callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     checkpoint = ModelCheckpoint(best_model_path, monitor='val_accuracy', verbose=1, save_best_only=True, mode='max')
 
     # Include checkpoint callback in the list
@@ -131,6 +131,9 @@ def train():
     print("💾 Saving model...")
 
     model.save(model_path)
+
+    # Get best model
+    model = models.load_model(best_model_path)
 
     # This code was originally in the evaluate function
     raw_predictions = model.predict(validation_images)
@@ -156,6 +159,34 @@ def train():
     report_filename = os.path.join(model_dir, 'classification-report.txt')
     with open(report_filename, 'w') as file:
         file.write(report)
+
+    # Make a bar graph for the classification report with the correct name of the topics
+    """CREATE TABLE IF NOT EXISTS topics
+        (topic_id INTEGER PRIMARY KEY, name TEXT UNIQUE)"""
+    conn = db.get_conn()
+    cur = conn.cursor()
+
+    cur.execute('SELECT name FROM topics ORDER BY topic_id ASC')
+    topics = cur.fetchall()
+    topics = [topic[0] for topic in topics]
+
+    # Process the report to extract metrics
+    lines = report.split('\n')[2:-5]  # Ignore the header and summary lines
+    precision = [float(line.split()[1]) for line in lines]
+
+    # Check if the number of topics matches the number of precision values
+    if len(topics) != len(precision):
+        raise ValueError("The number of topics does not match the number of entries in the classification report.")
+
+    # Plotting
+    report_filename = os.path.join(model_dir, 'classification-report.png')
+    plt.figure(figsize=(10, 8))
+    plt.bar(topics, precision)
+    plt.xticks(rotation=45)
+    plt.xlabel('Topic')
+    plt.ylabel('Precision')
+    plt.title('Classification Report')
+    plt.savefig(report_filename)
 
     # Save Performance Graphs
     def plot_history_key(history_key, title, ylabel, filename):
