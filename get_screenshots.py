@@ -11,13 +11,13 @@ from selenium.common import exceptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 # from train import INPUT_SIZE
-INPUT_SIZE = 256
 import db
+INPUT_SIZE = db.INPUT_SIZE
 
 # This scales the screenshots to k times the size of the CNN model input size
 # Pictures are in square format, so the width and height are the same
 # This will increase file size, but might also provide better quality downsampled images for the CNN
-WINDOW_SIZE = INPUT_SIZE * 4
+WINDOW_SIZE = INPUT_SIZE * 1
 
 # Number of browsers to run in parallel per CPU thread
 BROWSERS_PER_CORE = 1.5
