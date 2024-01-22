@@ -1,6 +1,13 @@
 import db
 import matplotlib.pyplot as plt
 import pandas as pd
+import os
+import glob
+
+import seaborn as sns
+from tensorflow.keras import models
+from sklearn.metrics import confusion_matrix
+import numpy as np
 
 def plot_screenshot_results():
     '''
@@ -150,7 +157,51 @@ def plot_label_distribution():
     plt.rcParams.update({'font.size': 10})
     plt.savefig('research_data/label_distribution.png')
 
+def get_latest_model_dir():
+    # Get the latest model directory
+    model_dir = max(glob.glob('research_data/models/*'), key=os.path.getmtime)
+    return model_dir
+
+def make_confusion_matrix(model_dir):
+    model_path = os.path.join(model_dir, "model.keras")
+    best_model_path = os.path.join(model_dir, "best.keras")
+
+    # Get best model
+    model = models.load_model(best_model_path)
+
+    class_names = db.get_topic_id_to_name_mapping()
+
+    _, _, validation_images, validation_labels = db.get_training_data(validation_data_only=True)
+
+    # This code was originally in the evaluate function
+    raw_predictions = model.predict(validation_images)
+    predictions = np.argmax(raw_predictions, axis=1).astype('int32')
+    validation_labels = np.argmax(validation_labels, axis=1).astype('int32')
+
+    validation_labels_named = np.vectorize(class_names.get)(validation_labels)
+    predictions_named = np.vectorize(class_names.get)(predictions)
+
+    # Confusion Matrix
+    cm = confusion_matrix(validation_labels_named, predictions_named, labels=list(class_names.values()))
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt="d", cmap='Blues', xticklabels=class_names.values(), yticklabels=class_names.values())
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    plt.tight_layout()
+    
+    # Add diagonal line as a reference for a perfect classifier
+    num_classes = len(class_names)
+    plt.plot([-0.5, num_classes-0.5], [-0.5, num_classes-0.5], color='red', lw=2)
+
+    plt.tight_layout()
+
+    # Save confusion matrix
+    cm_filename = os.path.join(model_dir, 'confusion-matrix.png')
+    plt.savefig(cm_filename, dpi=300)
 
 if __name__ == "__main__":
+    make_confusion_matrix('research_data/models/big one')
+    os._exit(0)
     plot_screenshot_results()
     plot_label_distribution()

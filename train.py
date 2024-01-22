@@ -99,7 +99,6 @@ def train():
 
     augmented_training_data = augmented_data_gen.flow(training_images, training_labels, batch_size=batch_size)
 
-
     # Make model name
     timestamp = datetime.datetime.now().strftime("%H%M%S-%d%m%Y")
     model_name = f"{timestamp}"
@@ -157,73 +156,6 @@ def train():
     report_filename = os.path.join(model_dir, 'classification-report.txt')
     with open(report_filename, 'w') as file:
         file.write(report)
-
-    # Make a bar graph for the classification report with the correct name of the topics
-    """CREATE TABLE IF NOT EXISTS topics
-        (topic_id INTEGER PRIMARY KEY, name TEXT UNIQUE)"""
-    conn = db.get_conn()
-    cur = conn.cursor()
-
-
-    # Process the report to extract metrics
-    lines = report.split('\n')[2:-5]  # Ignore the header and summary lines
-
-    data = {}
-
-    # Extracting metrics and building a dictionary
-    for line in lines:
-        parts = line.split()
-        topic_id = int(parts[0])
-        precision, recall, f1_score, support = map(float, parts[1:4]) + [int(parts[4])]
-
-        data[str(topic_id)] = {
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1_score,
-            'support': support
-        }
-
-    # Fetch topic names based on IDs
-    topic_ids = list(data.keys())
-    cur.execute(f'SELECT name FROM topics WHERE topic_id in ({",".join("?"*len(topic_ids))})', topic_ids)
-    fetched_topics = cur.fetchall()
-
-    # Update data dictionary with topic names
-    for topic_id, (topic_name,) in zip(topic_ids, fetched_topics):
-        data[topic_name] = data.pop(topic_id)
-
-    # Prepare data for plotting
-    topics = list(data.keys())
-    precisions = [data[topic]['precision'] for topic in topics]
-    recalls = [data[topic]['recall'] for topic in topics]
-    f1_scores = [data[topic]['f1_score'] for topic in topics]
-    supports = [data[topic]['support'] for topic in topics]
-
-    # Creating a grouped bar chart
-    x = np.arange(len(topics))  # the label locations
-    width = 0.2  # the width of the bars
-
-    fig, ax = plt.subplots(figsize=(15, 8))
-    rects1 = ax.bar(x - width*1.5, precisions, width, label='Precision')
-    rects2 = ax.bar(x - width/2, recalls, width, label='Recall')
-    rects3 = ax.bar(x + width/2, f1_scores, width, label='F1-Score')
-    rects4 = ax.bar(x + width*1.5, supports, width, label='Support')
-
-    # Add some text for labels, title, and custom x-axis tick labels
-    ax.set_xlabel('Topics')
-    ax.set_ylabel('Scores')
-    ax.set_title('Classification Report by Topic')
-    ax.set_xticks(x)
-    ax.set_xticklabels(topics)
-    ax.legend()
-
-    # Rotate the topic names for better visibility
-    plt.xticks(rotation=45)
-
-    # Save the plot
-    report_filename = os.path.join(model_dir, 'classification-report.png')
-    plt.savefig(report_filename)
-    plt.show()
 
     # Save Performance Graphs
     def plot_history_key(history_key, title, ylabel, filename):

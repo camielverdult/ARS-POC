@@ -677,6 +677,20 @@ def get_succesful_domain_urls() -> list[str]:
 
     return [row[0] for row in rows]
 
+def get_topic_id_to_name_mapping() -> dict:
+    """Returns a dictionary that maps topic IDs to their names"""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Get the topic IDs and names
+    cur.execute("SELECT topic_id, name FROM topics")
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return {row[0]: row[1] for row in rows}
+
 def get_training_data(limit: int = None, validation_data_only = False) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
     """
         Returns the screenshot image data and labels/topics for all labeled domains. Only succesful domains are used in training/validation. The labels are returned as a binary vector.
