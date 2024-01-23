@@ -163,7 +163,6 @@ def get_latest_model_dir():
     return model_dir
 
 def make_confusion_matrix(model_dir):
-    model_path = os.path.join(model_dir, "model.keras")
     best_model_path = os.path.join(model_dir, "best.keras")
 
     # Get best model
@@ -187,18 +186,22 @@ def make_confusion_matrix(model_dir):
     sns.heatmap(cm, annot=True, fmt="d", cmap='Blues', xticklabels=class_names.values(), yticklabels=class_names.values())
     plt.xlabel('Predicted')
     plt.ylabel('True')
-    plt.title('Confusion Matrix')
-    plt.tight_layout()
-    
+    plt.title('Confusion Matrix with the diagonal line representing a perfect classifier for comparison.')
+
     # Add diagonal line as a reference for a perfect classifier
     num_classes = len(class_names)
-    plt.plot([-0.5, num_classes-0.5], [-0.5, num_classes-0.5], color='red', lw=2)
+    plt.plot([-0.5, num_classes-0.5], [-0.5, num_classes-0.5], color='lightblue', lw=7, alpha=0.4)
 
     plt.tight_layout()
 
     # Save confusion matrix
     cm_filename = os.path.join(model_dir, 'confusion-matrix.png')
     plt.savefig(cm_filename, dpi=300)
+
+    # Save confusion matrix as csv
+    cm_df = pd.DataFrame(cm, index=class_names.values(), columns=class_names.values())
+    cm_df.to_csv(os.path.join(model_dir, 'confusion-matrix.csv'))
+    
 
 if __name__ == "__main__":
     make_confusion_matrix('research_data/models/big one')
