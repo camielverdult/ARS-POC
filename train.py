@@ -165,7 +165,7 @@ def train():
         plt.title(title)
         plt.ylabel(ylabel)
         plt.xlabel('Epoch')
-        plt.legend(loc='upper left')
+        plt.legend(loc='bottom right')
         plot_filename = os.path.join(model_dir, f'{filename}.png')
         plt.savefig(plot_filename)
 
