@@ -167,7 +167,7 @@ def train():
         plt.xlabel('Epoch')
         plt.legend(loc='bottom right')
         plot_filename = os.path.join(model_dir, f'{filename}.png')
-        plt.savefig(plot_filename)
+        plt.savefig(plot_filename, dpi=300)
 
     # Accuracy Plot
     plot_history_key('accuracy', 'Model Accuracy', 'Accuracy', 'accuracy')
