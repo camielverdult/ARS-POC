@@ -148,6 +148,9 @@ def plot_label_distribution():
     # Plotting, making sure all of the topic names on the x-axis are readable in the plot
     plt.figure(figsize=(10, 6))
     label_counts.plot(kind='bar', color='skyblue', edgecolor='black')
+    # Plot logarithmic function on the same plot for comparison to indicate the distribution is not uniform
+    # todo
+
     plt.title('Distribution of 10 most common labels')
     plt.xlabel('Label')
     plt.ylabel('Frequency')
@@ -201,10 +204,23 @@ def make_confusion_matrix(model_dir):
     # Save confusion matrix as csv
     cm_df = pd.DataFrame(cm, index=class_names.values(), columns=class_names.values())
     cm_df.to_csv(os.path.join(model_dir, 'confusion-matrix.csv'))
-    
+
+    # Find how many of the total predictions were in the top 3 predictions to investigate overfitting
+    top_3_predictions = np.argpartition(raw_predictions, -3)[:, -3:]
+    top_3_predictions_named = np.vectorize(class_names.get)(top_3_predictions)
+    top_3_predictions_named_df = pd.DataFrame(top_3_predictions_named, columns=['1st', '2nd', '3rd'])
+    top_3_predictions_named_df.to_csv(os.path.join(model_dir, 'top-3-predictions.csv'))
+
+    # Calculate the percentage of predictions that had (a) category(ies) in the top 3 predictions categories
+    top_3_predictions_in_top_3 = np.any(top_3_predictions == validation_labels.reshape(-1, 1), axis=1)
+    top_3_predictions_in_top_3_percentage = np.sum(top_3_predictions_in_top_3) / len(top_3_predictions_in_top_3)
+    with open(os.path.join(model_dir, 'top-3-predictions-percentage.txt'), 'w') as f:
+        f.write(str(top_3_predictions_in_top_3_percentage))
+
+
 
 if __name__ == "__main__":
-    make_confusion_matrix('research_data/models/big one')
+    # make_confusion_matrix('research_data/models/big one')
+    plot_label_distribution()
     os._exit(0)
     plot_screenshot_results()
-    plot_label_distribution()
